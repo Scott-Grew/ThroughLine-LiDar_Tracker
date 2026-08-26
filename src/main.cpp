@@ -1,4 +1,5 @@
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -52,7 +53,12 @@ void print_summary(const TrackingMetrics& metrics, const TimingStats& timing) {
 // was asked for. Non-headless runs the replay on its own thread so the viewer can keep drawing
 // while it works, and forces controls.quit once the viewer returns so a closed window always
 // stops the replay thread rather than leaving it running with nothing left to show for it.
-int main(int argument_count, char** arguments) {
+// Carries out one run: parses the command line, replays the segment, and prints what happened.
+// Kept separate from main so that every failure it can raise - a segment file that is missing or
+// truncated, a recording that cannot be written - arrives somewhere that can turn it into a line
+// of text and an exit code, instead of ending the process with an abort and throwing the
+// explanation away.
+int run(int argument_count, char** arguments) {
   std::string segment_path;
   bool segment_path_given = false;
   std::string export_path;
@@ -180,4 +186,14 @@ int main(int argument_count, char** arguments) {
   }
 
   return 0;
+}
+
+// Turns anything the run raises into a message on the error stream and a non-zero exit code.
+int main(int argument_count, char** arguments) {
+  try {
+    return run(argument_count, arguments);
+  } catch (const std::exception& failure) {
+    std::cerr << "tracker: " << failure.what() << "\n";
+    return 1;
+  }
 }
