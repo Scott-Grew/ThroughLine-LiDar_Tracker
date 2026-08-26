@@ -8,33 +8,57 @@
 #include "replay.hpp"
 #include "viewer.hpp"
 
+// This file is the front door: it turns command-line flags into the settings every other file
+// runs on, then either runs a segment straight through headless or hands the same replay to the
+// viewer on its own thread while it draws. Nothing decided here changes how the tracker, the
+// perturbation stage or the metrics behave - it only chooses which of their existing knobs to
+// turn, then prints or writes whatever they produced.
+
 namespace {
 
+// What to type to get any of the tracker's behaviour. Printed on --help and on a bad argument, so
+// it is the one place every flag has to be kept in sync with the parsing below.
 void print_usage() {
   std::cout << "Usage: tracker --segment PATH [--source gt|det] [--assign hungarian|greedy]\n"
                 "               [--dropout PROBABILITY] [--noise METRES] [--latency MILLISECONDS]\n"
+                "               [--sigma-position METRES] [--sigma-yaw RADIANS]\n"
                 "               [--seed N] [--rate R] [--headless] [--export PATH] [--help]\n";
 }
 
+// The one report a run produces for a human to read: how wrong the tracker was per object class,
+// by Waymo's own CLEAR accounting, and how fast the tracker itself ran. This is the training
+// monitor's number, never the one that gets reported - that one only ever comes from Waymo's
+// evaluator running on an export from this same run.
 void print_summary(const TrackingMetrics& metrics, const TimingStats& timing) {
   for (const auto& [object_class, class_metrics] : metrics.per_class()) {
     std::cout << "class " << static_cast<int>(object_class)
               << " mota " << class_metrics.mota()
-              << " motp " << class_metrics.motp() << "\n";
+              << " motp " << class_metrics.motp()
+              << " id_switches " << class_metrics.id_switches
+              << " misses " << class_metrics.misses
+              << " false_positives " << class_metrics.false_positives << "\n";
   }
-  std::cout << "p50 " << timing.percentile(0.5) << "ms"
-            << " p99 " << timing.percentile(0.99) << "ms"
-            << " overruns " << timing.overruns << "\n";
+  std::cout << "step_p50_ms " << timing.percentile(0.5)
+            << " step_p99_ms " << timing.percentile(0.99)
+            << " overruns " << timing.overruns
+            << " frames " << timing.step_milliseconds.size() << "\n";
 }
 
 }  // namespace
 
+// Parses the command line into a ReplaySettings, then runs one segment through the replay loop
+// either headless or alongside the viewer, prints the summary, and writes an export file if one
+// was asked for. Non-headless runs the replay on its own thread so the viewer can keep drawing
+// while it works, and forces controls.quit once the viewer returns so a closed window always
+// stops the replay thread rather than leaving it running with nothing left to show for it.
 int main(int argument_count, char** arguments) {
   std::string segment_path;
   bool segment_path_given = false;
   std::string export_path;
   bool export_requested = false;
   ReplaySettings settings;
+  settings.tracker.noise.sigma_measurement_position = 0.1;
+  settings.tracker.noise.sigma_measurement_yaw = 0.02;
 
   for (int argument_index = 1; argument_index < argument_count; ++argument_index) {
     std::string argument = arguments[argument_index];
@@ -94,6 +118,16 @@ int main(int argument_count, char** arguments) {
       continue;
     }
 
+    if (argument == "--sigma-position" && argument_index + 1 < argument_count) {
+      settings.tracker.noise.sigma_measurement_position = std::stod(arguments[++argument_index]);
+      continue;
+    }
+
+    if (argument == "--sigma-yaw" && argument_index + 1 < argument_count) {
+      settings.tracker.noise.sigma_measurement_yaw = std::stod(arguments[++argument_index]);
+      continue;
+    }
+
     if (argument == "--seed" && argument_index + 1 < argument_count) {
       settings.seed = std::stoull(arguments[++argument_index]);
       continue;
@@ -136,6 +170,7 @@ int main(int argument_count, char** arguments) {
   } else {
     std::thread replay_thread([&replay, &exchange, &controls]() { replay.run(exchange, controls); });
     run_viewer(exchange, controls);
+    controls.quit = true;
     replay_thread.join();
     print_summary(replay.metrics(), replay.timing());
   }
