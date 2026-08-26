@@ -42,11 +42,13 @@ class SnapshotExchange {
  public:
   Snapshot& writable();
   void publish();
-  const Snapshot* latest() const;
+  const Snapshot* acquire();
  private:
+  static constexpr int kFreshFlag = 4;
   std::array<Snapshot, 3> buffers_;
-  std::atomic<int> published_{-1};
   int writing_ = 0;
+  int reading_ = 1;
+  std::atomic<int> published_{2};
 };
 
 struct LiveControls {
