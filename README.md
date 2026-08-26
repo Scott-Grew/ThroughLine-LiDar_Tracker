@@ -109,52 +109,55 @@ official evaluator; see "Waymo's official evaluator" below.
 
 ## Results
 
-Scored by `motmetrics` 1.4.0, the MOTChallenge CLEAR implementation, against ground truth read
-straight from Waymo's `lidar_box` parquet, with box overlap computed by `shapely` 2.1.2. No code
-in this project takes part in the scoring.
+Scored by Waymo's own `compute_tracking_metrics_main`, built from their repository and run in a
+linux/amd64 container. `eval/run_official.sh` produces every number below. Nothing in this project
+takes part in the scoring.
 
-Three validation segments from Waymo Open Dataset Perception v2, staged 2026-08-25. Detections
-are the labelled boxes that the sensor returned at least one point for, so this measures the
-tracker alone, with detection held perfect. It is not comparable to a leaderboard result, which
-scores a detector and a tracker together.
+Three validation segments from Waymo Open Dataset Perception v2, 198/199/198 frames at 10 Hz.
+Detections are the labelled boxes the sensor returned at least one point for, so this measures the
+tracker with detection held perfect. It is not comparable to a challenge submission, which scores a
+detector and a tracker together.
 
-Vehicle at IoU 0.7, pedestrian at IoU 0.5:
+MOTA at LEVEL_2, which includes every labelled object:
 
-| segment | class | MOTA | IDF1 | switches | misses | false positives | objects |
-|---|---|---|---|---|---|---|---|
-| 10203656353524179475 | vehicle | 0.878 | 0.889 | 15 | 133 | 213 | 2946 |
-| 1024360143612057520 | vehicle | 0.956 | 0.924 | 25 | 150 | 162 | 7645 |
-| 10247954040621004675 | vehicle | 0.955 | 0.970 | 1 | 87 | 80 | 3730 |
-| 10203656353524179475 | pedestrian | 0.783 | 0.724 | 19 | 59 | 106 | 847 |
-| 1024360143612057520 | pedestrian | 0.911 | 0.788 | 35 | 97 | 200 | 3710 |
-| 10247954040621004675 | pedestrian | 0.734 | 0.659 | 4 | 8 | 22 | 128 |
+| segment | class | dropout 0 | dropout 0.2 | dropout 0.4 |
+|---|---|---|---|---|
+| 10203656353524179475 | vehicle | 0.877 | 0.845 | 0.760 |
+| 1024360143612057520 | vehicle | 0.956 | 0.942 | 0.873 |
+| 10247954040621004675 | vehicle | 0.955 | 0.936 | 0.864 |
+| 10203656353524179475 | pedestrian | 0.783 | 0.738 | 0.591 |
+| 1024360143612057520 | pedestrian | 0.911 | 0.903 | 0.817 |
+| 10247954040621004675 | pedestrian | 0.734 | 0.742 | 0.664 |
 
-Tracker step time on these runs: 0.07 ms median, worst p99 0.632 ms over 36 runs, against the
-100 ms a frame allows at 10 Hz.
+Segment 1024360143612057520 also contains cyclists: MOTA 0.864 at dropout 0.
 
-`metrics.cpp`, this project's in-process monitor, agrees with motmetrics exactly on all six runs,
-including the integer switch, miss and false-positive counts. It exists to watch a run as it
-happens and is never the source of a reported number.
+By range, vehicles at dropout 0, showing where tracking actually fails:
 
-The table above comes from `motmetrics`, not from Waymo's own evaluator - see "Waymo's official
-evaluator" below for the tool that is the referee for any reported number.
+| segment | 0 to 30 m | 30 to 50 m | beyond 50 m |
+|---|---|---|---|
+| 10203656353524179475 | 0.969 | 0.964 | 0.771 |
+| 1024360143612057520 | 0.972 | 0.967 | 0.921 |
+| 10247954040621004675 | 0.982 | 0.969 | 0.905 |
 
-Reproducing a row:
+Distant objects return few points, their boxes jitter more, and the association gate rejects them.
+Inside 50 m the tracker is close to the labels; beyond it the measurement itself is the limit.
+
+Tracker step time: 0.07 ms median, worst p99 0.632 ms over 36 runs, against the 100 ms a frame
+allows at 10 Hz. No frame exceeded the budget.
+
+Every row came from:
 
 ```
-~/venvs/tracker/bin/pip install "motmetrics==1.4.0" shapely
-./build/tracker --segment PATH --headless --sigma-position 0.036 --sigma-yaw 0.0088 \
-    --seed 1 --export TRACKS.csv
-~/venvs/tracker/bin/python eval/score_external.py --parquet-root ROOT --segment SEGMENT_NAME \
-    --tracks TRACKS.csv --class vehicle --iou-threshold 0.7
+./build/tracker --segment ~/waymo-data/staged/SHORT.trklog --headless \
+    --sigma-position 0.036 --sigma-yaw 0.0088 --dropout P --seed 1 --export TRACKS.csv
+./eval/run_official.sh FULL_SEGMENT_NAME TRACKS.csv
 ```
 
-`--class` is `vehicle`, `pedestrian` or `cyclist`; `--iou-threshold` is 0.7 for vehicles and 0.5
-for pedestrians and cyclists, matching `metrics.cpp`'s own per-class thresholds.
+Two independent implementations agree on these tracks: Waymo's evaluator and `motmetrics` 1.4.0
+match to within 0.0005 MOTA on every segment and class, and this project's own `metrics.cpp`
+monitor matches both exactly, including the integer miss, false-positive and switch counts. The
+monitor exists to watch a run as it happens and is never the source of a reported number.
 
-One convention differs on purpose: `motmetrics` reports MOTP as an average distance (`1 - IoU`,
-lower is better), while `metrics.cpp` reports MOTP as an average IoU (higher is better). The two
-are not the same quantity and this project does not convert between them.
 
 ## Waymo's official evaluator
 
