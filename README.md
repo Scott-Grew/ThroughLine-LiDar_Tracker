@@ -48,7 +48,7 @@ python3 -m venv ~/venvs/tracker
 ## Run
 
 ```
-./build/tracker --segment PATH [--source gt|det] [--assign hungarian|greedy]
+./build/tracker --segment PATH [--assign hungarian|greedy]
                 [--dropout PROBABILITY] [--noise METRES] [--latency MILLISECONDS]
                 [--sigma-position METRES] [--sigma-yaw RADIANS]
                 [--seed N] [--rate R] [--headless] [--rerun] [--rerun-save PATH]
@@ -188,4 +188,20 @@ protoc -I ~/waymo-data/waymo-open-dataset/src --python_out=eval/generated \
     waymo_open_dataset/label.proto waymo_open_dataset/protos/breakdown.proto \
     waymo_open_dataset/protos/keypoint.proto waymo_open_dataset/protos/vector.proto \
     waymo_open_dataset/protos/map.proto
+```
+
+## Cross-checking with motmetrics
+
+`eval/score_external.py` scores a tracker export against the same `lidar_box` ground truth using
+only third-party code: `shapely` computes the box overlaps and `motmetrics` runs the CLEAR MOT
+accumulation and metric formulas. It is a second, independent check on `metrics.cpp` and Waymo's
+own evaluator, never the source of a reported number.
+
+```
+~/venvs/tracker/bin/pip install "motmetrics==1.4.0" shapely
+```
+
+```
+~/venvs/tracker/bin/python eval/score_external.py \
+    --segment 10203656353524179475_7625_000_7645_000 --tracks TRACKS.csv --class vehicle
 ```
