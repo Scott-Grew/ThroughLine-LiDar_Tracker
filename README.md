@@ -80,17 +80,15 @@ from the same stored tracks the `--export` CSV comes from, whether or not
 
 Segment logs are little-endian binary files.
 
-Header: magic `TRKLOG01` (8 bytes), `uint32` frame count, `uint32` name
+Header: magic `TRKLOG02` (8 bytes), `uint32` frame count, `uint32` name
 length, name bytes.
 
 Per frame: `int64` capture time in microseconds; 16 `float64` values for
 `vehicle_to_world`, row-major; `uint32` point count followed by that many
-points, each 4 `float32` values (x, y, z, intensity); `uint32` ground truth
-box count followed by, per box: `uint64` object id, `uint8` class, 7
-`float64` values (center x, center y, center z, length, width, height, yaw),
-`int32` lidar points in box, `uint8` tracking difficulty; `uint32` detection
-count followed by, per detection: `uint8` class, 7 `float64` box values,
-`float32` score.
+points, each 3 `float32` values (x, y, z); `uint32` ground truth box count
+followed by, per box: `uint64` object id, `uint8` class, 7 `float64` values
+(center x, center y, center z, length, width, height, yaw), `int32` lidar
+points in box.
 
 The stager prints a sanity check for the first frame of every segment it
 stages: the number of staged points that fall inside each ground truth box,

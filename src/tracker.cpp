@@ -87,7 +87,6 @@ void Tracker::step(std::int64_t capture_time_micros, const std::vector<Detection
       update(track.state, world_boxes[detection_indices[column]], settings_.noise);
       track.hits += 1;
       track.consecutive_misses = 0;
-      track.last_update_micros = capture_time_micros;
       track.status = track.hits >= settings_.hits_to_confirm ? TrackStatus::Confirmed : TrackStatus::Tentative;
       track.history.emplace_back(track.state.mean(0), track.state.mean(1));
       if (track.history.size() > kHistoryLength) track.history.erase(track.history.begin());
@@ -110,7 +109,6 @@ void Tracker::step(std::int64_t capture_time_micros, const std::vector<Detection
       new_track.track_id = next_track_id_++;
       new_track.object_class = object_class;
       new_track.state = initial_state(world_box, settings_.noise);
-      new_track.last_update_micros = capture_time_micros;
       new_track.state_time_micros = capture_time_micros;
       new_track.hits = 1;
       new_track.consecutive_misses = 0;

@@ -1,7 +1,5 @@
 #include "perturb.hpp"
 
-#include "filter.hpp"
-
 // This file stands in for everything that makes a real sensor worse than a perfect one. It sits
 // between the ground truth or a detector and the tracker: replay.cpp reads a frame's detections,
 // passes them through here, and only the result is ever handed to the tracker. Three separate
@@ -35,10 +33,6 @@ std::vector<Detection> Perturbation::apply(const std::vector<Detection>& detecti
       std::normal_distribution<double> position_noise(0.0, settings_.position_noise_metres);
       perturbed.box.center_x += position_noise(generator_);
       perturbed.box.center_y += position_noise(generator_);
-    }
-    if (settings_.yaw_noise_radians > 0.0) {
-      std::normal_distribution<double> yaw_noise(0.0, settings_.yaw_noise_radians);
-      perturbed.box.yaw = wrap_angle(perturbed.box.yaw + yaw_noise(generator_));
     }
     kept.push_back(perturbed);
   }

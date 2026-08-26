@@ -6,7 +6,6 @@
 struct PerturbationSettings {
   double dropout_probability = 0.0;
   double position_noise_metres = 0.0;
-  double yaw_noise_radians = 0.0;
   std::int64_t latency_micros = 0;
 };
 

@@ -44,7 +44,6 @@ inline SegmentLog make_synthetic_segment(int frame_count, int object_count, std:
       truth.object_class = ObjectClass::Vehicle;
       truth.box = Box{object.x, object.y, 0.0, 4.5, 2.0, 1.6, wrap_angle(object.yaw)};
       truth.lidar_points_in_box = 50;
-      truth.tracking_difficulty = 1;
       frame.ground_truth.push_back(truth);
 
       if (std::abs(object.yaw_rate) < 1e-4) {

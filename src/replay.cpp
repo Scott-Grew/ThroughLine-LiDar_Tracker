@@ -20,11 +20,10 @@
 // sliders take over from there. Without that the controls would sit at zero and quietly erase
 // every dropout, noise and latency setting a caller asked for.
 //
-// When the run is set to take its detections from the labels rather than from a detector, boxes
-// that the sensor returned no points for are left out. Waymo labels objects it knows are there
-// even when nothing came back from them, and its own scoring ignores those, so handing them to the
-// tracker would give it knowledge no detector could have and then count every one of them against
-// it as an object it invented.
+// Detections are always the ground-truth labels: boxes the sensor returned no points for are left
+// out. Waymo labels objects it knows are there even when nothing came back from them, and its own
+// scoring ignores those, so handing them to the tracker would give it knowledge no detector could
+// have and then count every one of them against it as an object it invented.
 
 namespace {
 
@@ -116,18 +115,13 @@ void Replay::run(SnapshotExchange& exchange, LiveControls& controls) {
     live_perturbation.dropout_probability = controls.dropout_probability.load();
     live_perturbation.position_noise_metres = controls.position_noise_metres.load();
     live_perturbation.latency_micros = controls.latency_micros.load();
-    live_perturbation.yaw_noise_radians = settings_.perturbation.yaw_noise_radians;
     perturbation_.set(live_perturbation);
 
     std::vector<Detection> source_detections;
-    if (settings_.source == DetectionSource::GroundTruth) {
-      source_detections.reserve(frame.ground_truth.size());
-      for (const GroundTruthBox& truth : frame.ground_truth) {
-        if (truth.lidar_points_in_box <= 0) continue;
-        source_detections.push_back(Detection{truth.object_class, truth.box, 1.0f});
-      }
-    } else {
-      source_detections = frame.detections;
+    source_detections.reserve(frame.ground_truth.size());
+    for (const GroundTruthBox& truth : frame.ground_truth) {
+      if (truth.lidar_points_in_box <= 0) continue;
+      source_detections.push_back(Detection{truth.object_class, truth.box, 1.0f});
     }
 
     pending.push_back(PendingMeasurement{perturbation_.available_time(frame.capture_time_micros),

@@ -149,16 +149,12 @@ void TrackingMetrics::update(const std::vector<Track>& tracks, const std::vector
       class_metrics.iou_sum += pair.intersection_over_union;
       const auto previous_match = last_matched_track_for_object_.find(truth.object_id);
       if (previous_match != last_matched_track_for_object_.end() && previous_match->second != track.track_id) class_metrics.id_switches += 1;
-      if (ever_matched_[truth.object_id] && !matched_last_frame_[truth.object_id]) class_metrics.fragmentations += 1;
       last_matched_track_for_object_[truth.object_id] = track.track_id;
-      ever_matched_[truth.object_id] = true;
-      matched_last_frame_[truth.object_id] = true;
     }
 
     for (std::size_t ground_truth_index = 0; ground_truth_index < eligible_ground_truth.size(); ++ground_truth_index) {
       if (ground_truth_claimed[ground_truth_index]) continue;
       class_metrics.misses += 1;
-      matched_last_frame_[eligible_ground_truth[ground_truth_index].object_id] = false;
     }
 
     for (std::size_t track_index = 0; track_index < candidate_tracks.size(); ++track_index)

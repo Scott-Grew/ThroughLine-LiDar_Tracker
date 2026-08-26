@@ -19,7 +19,7 @@ namespace {
 // What to type to get any of the tracker's behaviour. Printed on --help and on a bad argument, so
 // it is the one place every flag has to be kept in sync with the parsing below.
 void print_usage() {
-  std::cout << "Usage: tracker --segment PATH [--source gt|det] [--assign hungarian|greedy]\n"
+  std::cout << "Usage: tracker --segment PATH [--assign hungarian|greedy]\n"
                 "               [--dropout PROBABILITY] [--noise METRES] [--latency MILLISECONDS]\n"
                 "               [--sigma-position METRES] [--sigma-yaw RADIANS]\n"
                 "               [--seed N] [--rate R] [--headless] [--rerun] [--rerun-save PATH]\n"
@@ -76,20 +76,6 @@ int main(int argument_count, char** arguments) {
       segment_path = arguments[++argument_index];
       segment_path_given = true;
       continue;
-    }
-
-    if (argument == "--source" && argument_index + 1 < argument_count) {
-      std::string value = arguments[++argument_index];
-      if (value == "gt") {
-        settings.source = DetectionSource::GroundTruth;
-        continue;
-      }
-      if (value == "det") {
-        settings.source = DetectionSource::Detector;
-        continue;
-      }
-      print_usage();
-      return 2;
     }
 
     if (argument == "--assign" && argument_index + 1 < argument_count) {

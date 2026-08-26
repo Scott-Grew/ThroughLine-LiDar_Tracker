@@ -9,10 +9,7 @@
 #include "predict.hpp"
 #include "tracker.hpp"
 
-enum class DetectionSource { GroundTruth, Detector };
-
 struct ReplaySettings {
-  DetectionSource source = DetectionSource::GroundTruth;
   double rate = 1.0;
   bool headless = false;
   std::uint64_t seed = 1;

@@ -29,17 +29,15 @@ struct GroundTruthBox {
   ObjectClass object_class;
   Box box;
   std::int32_t lidar_points_in_box;
-  std::uint8_t tracking_difficulty;
 };
 
-struct Point { float x, y, z, intensity; };
+struct Point { float x, y, z; };
 
 struct Frame {
   std::int64_t capture_time_micros;
   Eigen::Matrix4d vehicle_to_world;
   std::vector<Point> points;
   std::vector<GroundTruthBox> ground_truth;
-  std::vector<Detection> detections;
 };
 
 struct TrackState {
@@ -55,7 +53,6 @@ struct Track {
   ObjectClass object_class;
   TrackStatus status;
   TrackState state;
-  std::int64_t last_update_micros;
   std::int64_t state_time_micros;
   std::uint32_t hits;
   std::uint32_t consecutive_misses;

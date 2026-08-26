@@ -15,7 +15,7 @@ import struct
 import numpy as np
 import pyarrow.parquet as pq
 
-MAGIC = b"TRKLOG01"
+MAGIC = b"TRKLOG02"
 VEHICLE_TYPE = 1
 PEDESTRIAN_TYPE = 2
 CYCLIST_TYPE = 4
@@ -80,7 +80,6 @@ def read_components(parquet_root, segment, laser):
         heading,
         object_type,
         num_lidar_points_in_box,
-        tracking_difficulty,
     ) in zip(
         box_table.column("key.frame_timestamp_micros").to_pylist(),
         box_table.column("key.laser_object_id").to_pylist(),
@@ -93,7 +92,6 @@ def read_components(parquet_root, segment, laser):
         box_table.column("[LiDARBoxComponent].box.heading").to_pylist(),
         box_table.column("[LiDARBoxComponent].type").to_pylist(),
         box_table.column("[LiDARBoxComponent].num_lidar_points_in_box").to_pylist(),
-        box_table.column("[LiDARBoxComponent].difficulty_level.tracking").to_pylist(),
     ):
         if object_type not in (VEHICLE_TYPE, PEDESTRIAN_TYPE, CYCLIST_TYPE):
             continue
@@ -108,7 +106,6 @@ def read_components(parquet_root, segment, laser):
             "height": size_z,
             "heading": heading,
             "num_lidar_points_in_box": num_lidar_points_in_box,
-            "tracking_difficulty": tracking_difficulty if tracking_difficulty is not None else 0,
         })
 
     pose_by_frame = dict(zip(
@@ -133,7 +130,6 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
     height, width, channel_count = range_image_shape
     range_image = np.array(range_image_values, dtype=np.float64).reshape(height, width, channel_count)
     range_channel = range_image[:, :, 0]
-    intensity_channel = range_image[:, :, 1]
 
     inclination_values = calibration["inclination_values"]
     if inclination_values is not None and len(inclination_values) == height:
@@ -152,7 +148,6 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
     ranges = range_channel[valid_mask]
     valid_inclinations = inclination_grid[valid_mask]
     valid_azimuths = azimuth_grid[valid_mask]
-    valid_intensities = intensity_channel[valid_mask]
 
     sensor_x = ranges * np.cos(valid_inclinations) * np.cos(valid_azimuths)
     sensor_y = ranges * np.cos(valid_inclinations) * np.sin(valid_azimuths)
@@ -161,9 +156,8 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
     sensor_points = np.stack([sensor_x, sensor_y, sensor_z, np.ones_like(sensor_x)], axis=1)
     vehicle_points = (extrinsic @ sensor_points.T).T
 
-    points = np.empty((vehicle_points.shape[0], 4), dtype=np.float32)
+    points = np.empty((vehicle_points.shape[0], 3), dtype=np.float32)
     points[:, 0:3] = vehicle_points[:, 0:3]
-    points[:, 3] = valid_intensities
     return points
 
 
@@ -230,8 +224,6 @@ def write_log(path, segment_name, frames):
                     box["length"], box["width"], box["height"], box["heading"],
                 ))
                 stream.write(struct.pack("<i", box["num_lidar_points_in_box"]))
-                stream.write(struct.pack("<B", box["tracking_difficulty"]))
-            stream.write(struct.pack("<I", 0))
 
 
 def main():

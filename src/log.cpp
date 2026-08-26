@@ -2,15 +2,29 @@
 #include <fstream>
 #include <stdexcept>
 
+// This file is the only place the staged binary log format is read or written. stage_segment.py
+// writes it from Waymo's parquet components, and write_segment_log/read_segment_log here are its
+// only reader and writer on the C++ side - everything downstream works with a SegmentLog in
+// memory and never touches the bytes directly. The layout is little-endian throughout: a fixed
+// header, then one record per frame holding that frame's pose, its lidar points as plain x, y, z
+// float32 triples, and its ground truth boxes. The magic string is bumped whenever the layout
+// changes, so a log staged under an older layout is refused outright instead of being silently
+// misread.
+
 namespace {
 
-constexpr char kMagic[8] = {'T', 'R', 'K', 'L', 'O', 'G', '0', '1'};
+constexpr char kMagic[8] = {'T', 'R', 'K', 'L', 'O', 'G', '0', '2'};
 
+// Writes one value of any fixed-size type as its raw bytes. Every scalar field in the format goes
+// through this, so the layout below is exactly the memory layout of whatever type is passed in.
 template <typename Value>
 void write_value(std::ofstream& stream, const Value& value) {
   stream.write(reinterpret_cast<const char*>(&value), sizeof(Value));
 }
 
+// The other half of write_value: reads one value's raw bytes back out. Throws if the stream ran
+// out before a full value was available, which is what turns a truncated file into a clear error
+// instead of a silently half-read struct.
 template <typename Value>
 Value read_value(std::ifstream& stream) {
   Value value;
@@ -19,6 +33,7 @@ Value read_value(std::ifstream& stream) {
   return value;
 }
 
+// Writes the seven numbers a Box carries, in the fixed order read_box below expects back.
 void write_box(std::ofstream& stream, const Box& box) {
   write_value(stream, box.center_x);
   write_value(stream, box.center_y);
@@ -29,6 +44,7 @@ void write_box(std::ofstream& stream, const Box& box) {
   write_value(stream, box.yaw);
 }
 
+// Reads a Box back in the same order write_box wrote it.
 Box read_box(std::ifstream& stream) {
   Box box;
   box.center_x = read_value<double>(stream);
@@ -43,6 +59,10 @@ Box read_box(std::ifstream& stream) {
 
 }
 
+// Writes a whole segment: the magic and header first, then one record per frame - its capture
+// time, its 4x4 pose in row-major order, its points as raw x, y, z float32 triples, and its
+// ground truth boxes. stage_segment.py writes the exact same layout from Python, and the two are
+// checked against each other by round-tripping a staged segment through both.
 void write_segment_log(const std::string& path, const SegmentLog& segment) {
   std::ofstream stream(path, std::ios::binary);
   if (!stream) throw std::runtime_error("cannot open " + path);
@@ -62,17 +82,13 @@ void write_segment_log(const std::string& path, const SegmentLog& segment) {
       write_value(stream, static_cast<std::uint8_t>(truth.object_class));
       write_box(stream, truth.box);
       write_value(stream, truth.lidar_points_in_box);
-      write_value(stream, truth.tracking_difficulty);
-    }
-    write_value(stream, static_cast<std::uint32_t>(frame.detections.size()));
-    for (const Detection& detection : frame.detections) {
-      write_value(stream, static_cast<std::uint8_t>(detection.object_class));
-      write_box(stream, detection.box);
-      write_value(stream, detection.score);
     }
   }
 }
 
+// Reads a whole segment back, refusing anything whose magic does not match this file's current
+// layout - which is what makes a log staged under an older format fail loudly here rather than
+// being read as if its bytes meant something they do not.
 SegmentLog read_segment_log(const std::string& path) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream) throw std::runtime_error("cannot open " + path);
@@ -97,13 +113,6 @@ SegmentLog read_segment_log(const std::string& path) {
       truth.object_class = static_cast<ObjectClass>(read_value<std::uint8_t>(stream));
       truth.box = read_box(stream);
       truth.lidar_points_in_box = read_value<std::int32_t>(stream);
-      truth.tracking_difficulty = read_value<std::uint8_t>(stream);
-    }
-    frame.detections.resize(read_value<std::uint32_t>(stream));
-    for (Detection& detection : frame.detections) {
-      detection.object_class = static_cast<ObjectClass>(read_value<std::uint8_t>(stream));
-      detection.box = read_box(stream);
-      detection.score = read_value<float>(stream);
     }
     if (!stream) throw std::runtime_error("segment log truncated");
   }
