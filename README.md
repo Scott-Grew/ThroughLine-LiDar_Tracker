@@ -110,22 +110,36 @@ that wiring exists.
 
 ## Results
 
-No externally scored numbers yet.
+Scored by `motmetrics` 1.4.0, the MOTChallenge CLEAR implementation, against ground truth read
+straight from Waymo's `lidar_box` parquet, with box overlap computed by `shapely` 2.1.2. No code
+in this project takes part in the scoring.
 
-Three validation segments from Waymo Open Dataset Perception v2 are staged and the tracker runs
-end to end on them, but every number produced so far comes from `metrics.cpp`, which is this
-project's own in-process monitor. Those numbers are a development aid and are not reported here.
+Three validation segments from Waymo Open Dataset Perception v2, staged 2026-08-25. Detections
+are the labelled boxes that the sensor returned at least one point for, so this measures the
+tracker alone, with detection held perfect. It is not comparable to a leaderboard result, which
+scores a detector and a tracker together.
 
-The scores that will appear in this section come from Waymo's official tracking evaluator, with
-an established third-party implementation used to check that the monitor agrees with it.
+Vehicle at IoU 0.7, pedestrian at IoU 0.5:
 
-### Checking the monitor against a third-party scorer
+| segment | class | MOTA | IDF1 | switches | misses | false positives | objects |
+|---|---|---|---|---|---|---|---|
+| 10203656353524179475 | vehicle | 0.878 | 0.889 | 15 | 133 | 213 | 2946 |
+| 1024360143612057520 | vehicle | 0.956 | 0.924 | 25 | 150 | 162 | 7645 |
+| 10247954040621004675 | vehicle | 0.955 | 0.970 | 1 | 87 | 80 | 3730 |
+| 10203656353524179475 | pedestrian | 0.783 | 0.724 | 19 | 59 | 106 | 847 |
+| 1024360143612057520 | pedestrian | 0.911 | 0.788 | 35 | 97 | 200 | 3710 |
+| 10247954040621004675 | pedestrian | 0.734 | 0.659 | 4 | 8 | 22 | 128 |
 
-`eval/score_external.py` scores a track export using only third-party code: `shapely` computes
-every box's 3D IoU (bird's-eye footprint intersection from `Polygon`, times vertical overlap),
-and `motmetrics` runs the CLEAR MOT accumulation and formulas. Ground truth is read straight out
-of Waymo's `lidar_box` parquet, not from the staged log, so this project's own log format is not
-in the scoring path either.
+Tracker step time on these runs: 0.07 ms median, worst p99 0.632 ms over 36 runs, against the
+100 ms a frame allows at 10 Hz.
+
+`metrics.cpp`, this project's in-process monitor, agrees with motmetrics exactly on all six runs,
+including the integer switch, miss and false-positive counts. It exists to watch a run as it
+happens and is never the source of a reported number.
+
+Waymo's own evaluator is not wired up yet, so nothing here is a Waymo benchmark result.
+
+Reproducing a row:
 
 ```
 ~/venvs/tracker/bin/pip install "motmetrics==1.4.0" shapely
