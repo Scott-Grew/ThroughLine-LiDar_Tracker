@@ -37,13 +37,18 @@ python3 -m venv ~/venvs/tracker
 ```
 ./build/tracker --segment PATH [--source gt|det] [--assign hungarian|greedy]
                 [--dropout PROBABILITY] [--noise METRES] [--latency MILLISECONDS]
+                [--sigma-position METRES] [--sigma-yaw RADIANS]
                 [--seed N] [--rate R] [--headless] [--export PATH] [--help]
 ```
 
-`--headless` runs the tracker without the viewer and prints per-class MOTA
-and MOTP plus the tracker step p50/p99 and overrun count. Without
-`--headless` the viewer opens alongside the tracker running on its own
-thread.
+`--sigma-position` and `--sigma-yaw` set the filter's assumed measurement
+noise (defaults 0.1 m and 0.02 rad); the stager prints its own measured
+values for a staged segment, which are the numbers to pass here.
+
+`--headless` runs the tracker without the viewer and prints per-class MOTA,
+MOTP, id switches, misses and false positives, plus the tracker step
+p50/p99, overrun count and frame count. Without `--headless` the viewer
+opens alongside the tracker running on its own thread.
 
 ## Test
 
@@ -66,6 +71,22 @@ box count followed by, per box: `uint64` object id, `uint8` class, 7
 `int32` lidar points in box, `uint8` tracking difficulty; `uint32` detection
 count followed by, per detection: `uint8` class, 7 `float64` box values,
 `float32` score.
+
+The stager prints a sanity check for the first frame of every segment it
+stages: the number of staged points that fall inside each ground truth box,
+divided by the number of points Waymo itself reports for those boxes. A
+ratio far from 1 (outside 0.5-1.5) means the range image's azimuth
+convention is wrong, and the stager prints a warning rather than staging
+the segment silently.
+
+## Export format
+
+`--export PATH` writes one CSV row per confirmed track per frame, in the
+vehicle frame of that frame rather than the tracker's internal world frame:
+`frame_timestamp_micros,track_id,object_class,center_x,center_y,center_z,length,width,height,yaw`.
+This is what a Python script in the container turns into Waymo's Objects
+proto for the official evaluator; `eval/run_official.sh` stays a stub until
+that wiring exists.
 
 ## Results
 
