@@ -18,4 +18,6 @@ class TrackingMetrics {
  private:
   std::unordered_map<ObjectClass, ClassMetrics> per_class_;
   std::unordered_map<std::uint64_t, std::uint64_t> last_matched_track_for_object_;
+  std::unordered_map<std::uint64_t, bool> matched_last_frame_;
+  std::unordered_map<std::uint64_t, bool> ever_matched_;
 };
