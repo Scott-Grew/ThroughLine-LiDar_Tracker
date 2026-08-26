@@ -17,8 +17,21 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-This fetches Eigen 3.4.0, Catch2 v3.7.1, GLFW 3.4, Dear ImGui v1.91.5 and
-ImPlot v0.16 via CMake FetchContent on first configure.
+This fetches Eigen 3.4.0, Catch2 v3.7.1, GLFW 3.4, Dear ImGui v1.91.5 and the
+Rerun C++ SDK 0.26.0 via CMake FetchContent on first configure. The Rerun SDK
+version is pinned at 0.26.0 rather than latest because Rerun stopped shipping
+a macOS x86_64 prebuilt library after that release, and this is an Intel Mac.
+Only the `tracker` executable links Rerun and Arrow; `tracker_core` and
+`tracker_tests` stay free of both. Arrow is built from source inside `build/`
+by the Rerun SDK's own FetchContent step (`RERUN_DOWNLOAD_AND_BUILD_ARROW`,
+left at its default of ON) - nothing is installed system-wide, and this first
+build is a one-off cost of a little over 16 minutes under `-j2` on this
+machine.
+
+The viewer application that the live `--rerun` flag spawns is a separate
+program, not part of this build: `~/venvs/tracker/bin/pip install
+rerun-sdk==0.26.0` installs it into the same virtual environment the stager
+uses.
 
 ## Stage
 
@@ -38,7 +51,8 @@ python3 -m venv ~/venvs/tracker
 ./build/tracker --segment PATH [--source gt|det] [--assign hungarian|greedy]
                 [--dropout PROBABILITY] [--noise METRES] [--latency MILLISECONDS]
                 [--sigma-position METRES] [--sigma-yaw RADIANS]
-                [--seed N] [--rate R] [--headless] [--export PATH] [--help]
+                [--seed N] [--rate R] [--headless] [--rerun] [--rerun-save PATH]
+                [--export PATH] [--help]
 ```
 
 `--sigma-position` and `--sigma-yaw` set the filter's assumed measurement
@@ -48,7 +62,13 @@ values for a staged segment, which are the numbers to pass here.
 `--headless` runs the tracker without the viewer and prints per-class MOTA,
 MOTP, id switches, misses and false positives, plus the tracker step
 p50/p99, overrun count and frame count. Without `--headless` the viewer
-opens alongside the tracker running on its own thread.
+opens alongside the tracker running on its own thread: a small ImGui window
+of perturbation sliders, and, when `--rerun` is also given, a live Rerun
+window drawing the lidar points, the ego box, and every confirmed track's
+box, history trail, predicted path and uncertainty ellipse. `--rerun-save
+PATH` writes a gapless `.rrd` recording of the whole run afterward, built
+from the same stored tracks the `--export` CSV comes from, whether or not
+`--rerun` was given.
 
 ## Test
 

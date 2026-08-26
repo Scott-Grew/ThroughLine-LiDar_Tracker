@@ -22,7 +22,8 @@ void print_usage() {
   std::cout << "Usage: tracker --segment PATH [--source gt|det] [--assign hungarian|greedy]\n"
                 "               [--dropout PROBABILITY] [--noise METRES] [--latency MILLISECONDS]\n"
                 "               [--sigma-position METRES] [--sigma-yaw RADIANS]\n"
-                "               [--seed N] [--rate R] [--headless] [--export PATH] [--help]\n";
+                "               [--seed N] [--rate R] [--headless] [--rerun] [--rerun-save PATH]\n"
+                "               [--export PATH] [--help]\n";
 }
 
 // The one report a run produces for a human to read: how wrong the tracker was per object class,
@@ -56,6 +57,9 @@ int main(int argument_count, char** arguments) {
   bool segment_path_given = false;
   std::string export_path;
   bool export_requested = false;
+  std::string rerun_save_path;
+  bool rerun_save_requested = false;
+  bool log_to_rerun = false;
   ReplaySettings settings;
   settings.tracker.noise.sigma_measurement_position = 0.1;
   settings.tracker.noise.sigma_measurement_yaw = 0.02;
@@ -143,6 +147,17 @@ int main(int argument_count, char** arguments) {
       continue;
     }
 
+    if (argument == "--rerun") {
+      log_to_rerun = true;
+      continue;
+    }
+
+    if (argument == "--rerun-save" && argument_index + 1 < argument_count) {
+      rerun_save_path = arguments[++argument_index];
+      rerun_save_requested = true;
+      continue;
+    }
+
     if (argument == "--export" && argument_index + 1 < argument_count) {
       export_path = arguments[++argument_index];
       export_requested = true;
@@ -169,7 +184,7 @@ int main(int argument_count, char** arguments) {
     print_summary(replay.metrics(), replay.timing());
   } else {
     std::thread replay_thread([&replay, &exchange, &controls]() { replay.run(exchange, controls); });
-    run_viewer(exchange, controls);
+    run_viewer(exchange, controls, segment, log_to_rerun);
     controls.quit = true;
     replay_thread.join();
     print_summary(replay.metrics(), replay.timing());
@@ -177,6 +192,11 @@ int main(int argument_count, char** arguments) {
 
   if (export_requested) {
     export_tracks(export_path, segment, replay.confirmed_tracks_per_frame());
+  }
+
+  if (rerun_save_requested) {
+    save_replay_recording(rerun_save_path, segment, replay.confirmed_tracks_per_frame(), predictor,
+                           settings.prediction_horizon_seconds, settings.prediction_step_seconds);
   }
 
   return 0;

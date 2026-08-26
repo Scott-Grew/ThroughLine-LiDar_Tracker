@@ -45,13 +45,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-FetchContent_Declare(
-  implot
-  GIT_REPOSITORY https://github.com/epezent/implot.git
-  GIT_TAG v0.16
-)
-FetchContent_MakeAvailable(implot)
-
 find_package(OpenGL REQUIRED)
 
 add_library(imgui STATIC
@@ -61,13 +54,10 @@ add_library(imgui STATIC
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-  ${implot_SOURCE_DIR}/implot.cpp
-  ${implot_SOURCE_DIR}/implot_items.cpp
 )
 target_include_directories(imgui PUBLIC
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
-  ${implot_SOURCE_DIR}
 )
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
@@ -86,11 +76,20 @@ add_library(tracker_core
 target_include_directories(tracker_core PUBLIC src)
 target_link_libraries(tracker_core PUBLIC Eigen3::Eigen)
 
+# Pinned to 0.26.0: Rerun stopped shipping a macOS x86_64 prebuilt library after this release, and
+# this machine is an Intel Mac, so 0.26.0 is the newest version that still links here.
+FetchContent_Declare(
+  rerun_sdk
+  URL https://github.com/rerun-io/rerun/releases/download/0.26.0/rerun_cpp_sdk.zip
+)
+FetchContent_MakeAvailable(rerun_sdk)
+
 add_executable(tracker
   src/main.cpp
   src/viewer.cpp
 )
-target_link_libraries(tracker PRIVATE tracker_core imgui)
+target_link_libraries(tracker PRIVATE tracker_core imgui rerun_sdk)
+target_compile_definitions(tracker PRIVATE GL_SILENCE_DEPRECATION)
 
 enable_testing()
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
