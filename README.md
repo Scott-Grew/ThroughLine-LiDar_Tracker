@@ -104,9 +104,8 @@ the segment silently.
 `--export PATH` writes one CSV row per confirmed track per frame, in the
 vehicle frame of that frame rather than the tracker's internal world frame:
 `frame_timestamp_micros,track_id,object_class,center_x,center_y,center_z,length,width,height,yaw`.
-This is what a Python script in the container turns into Waymo's Objects
-proto for the official evaluator; `eval/run_official.sh` stays a stub until
-that wiring exists.
+`eval/to_waymo_objects.py` turns this into Waymo's Objects proto for the
+official evaluator; see "Waymo's official evaluator" below.
 
 ## Results
 
@@ -137,7 +136,8 @@ Tracker step time on these runs: 0.07 ms median, worst p99 0.632 ms over 36 runs
 including the integer switch, miss and false-positive counts. It exists to watch a run as it
 happens and is never the source of a reported number.
 
-Waymo's own evaluator is not wired up yet, so nothing here is a Waymo benchmark result.
+The table above comes from `motmetrics`, not from Waymo's own evaluator - see "Waymo's official
+evaluator" below for the tool that is the referee for any reported number.
 
 Reproducing a row:
 
@@ -155,3 +155,36 @@ for pedestrians and cyclists, matching `metrics.cpp`'s own per-class thresholds.
 One convention differs on purpose: `motmetrics` reports MOTP as an average distance (`1 - IoU`,
 lower is better), while `metrics.cpp` reports MOTP as an average IoU (higher is better). The two
 are not the same quantity and this project does not convert between them.
+
+## Waymo's official evaluator
+
+`eval/run_official.sh` prints Waymo's own 3D tracking metrics for one segment, produced by
+`compute_tracking_metrics_main`, the binary Waymo ships in the `waymo-open-dataset` repository,
+running inside a `linux/amd64` container. Nothing in this project computes the number this prints;
+`eval/to_waymo_objects.py` only repacks the tracker's CSV export and Waymo's own `lidar_box`
+parquet into the two `Objects` proto files the binary reads.
+
+```
+./build/tracker --segment PATH --headless --sigma-position 0.036 --sigma-yaw 0.0088 \
+    --seed 1 --export TRACKS.csv
+eval/run_official.sh SEGMENT_NAME TRACKS.csv
+```
+
+`SEGMENT_NAME` is the full segment name (the same name the staged log and the parquet files carry).
+The first run builds the evaluator image, which clones `waymo-open-dataset` and compiles only
+`//waymo_open_dataset/metrics/tools:compute_tracking_metrics_main` with bazel inside a
+`gcr.io/bazel-public/bazel:6.4.0` container; later runs reuse the built image. The script converts
+the tracks CSV and the ground truth into a temporary directory, runs the container against both
+files, and prints the binary's own output verbatim - a MOTA, MOTP, miss, mismatch and false-positive
+breakdown per object type, per range bucket and per difficulty level.
+
+The Python bindings the converter imports live in `eval/generated/`, generated once from the
+cloned repository's `.proto` files with the local `protoc` and not committed:
+
+```
+protoc -I ~/waymo-data/waymo-open-dataset/src --python_out=eval/generated \
+    waymo_open_dataset/protos/metrics.proto waymo_open_dataset/dataset.proto \
+    waymo_open_dataset/label.proto waymo_open_dataset/protos/breakdown.proto \
+    waymo_open_dataset/protos/keypoint.proto waymo_open_dataset/protos/vector.proto \
+    waymo_open_dataset/protos/map.proto
+```
