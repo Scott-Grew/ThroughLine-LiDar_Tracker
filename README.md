@@ -3,8 +3,8 @@
 A C++ real-time 3D multi-object tracker and replay viewer on the Waymo Open
 Dataset (Perception, v2 parquet). A Kalman filter with constant-turn-rate
 motion tracks detections across frames, a Hungarian assignment matches
-detections to tracks, a perturbation stage injects dropout, position and yaw
-noise, and latency into the detection stream, CLEAR tracking metrics (MOTA,
+detections to tracks, a perturbation stage injects dropout, position noise,
+and latency into the detection stream, CLEAR tracking metrics (MOTA,
 MOTP) score the result against ground truth, and Waymo's official evaluator
 is the referee for any reported number.
 
