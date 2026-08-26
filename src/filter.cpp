@@ -1,6 +1,7 @@
 #include "filter.hpp"
 
 #include <cmath>
+#include <stdexcept>
 
 // This file is the estimator. Every tracked object owns five numbers - where it is (x and y),
 // which way it faces, how fast it is going, and how quickly it is turning - plus a table of how
@@ -60,10 +61,14 @@ double wrap_angle(double radians) {
 }
 
 // Builds the starting five numbers for an object the tracker has just seen for the first time.
+// Refuses a sensor with no jitter at all, because that would claim the first box is perfect and
+// leave the object with zero uncertainty, which every later calculation would divide by.
 // Position and facing are copied straight from the box because that is exactly what was measured.
 // Speed and turn rate start at zero, but marked as very unsure, so the next few frames can move
 // them to the truth. The size of the box is carried along untouched.
 TrackState initial_state(const Box& box, const FilterNoise& noise) {
+  if (noise.sigma_measurement_position <= 0.0 || noise.sigma_measurement_yaw <= 0.0)
+    throw std::invalid_argument("measurement noise must be positive");
   TrackState state;
   state.mean << box.center_x, box.center_y, box.yaw, 0.0, 0.0;
   state.covariance.setZero();
