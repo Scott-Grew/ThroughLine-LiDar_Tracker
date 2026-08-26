@@ -19,18 +19,13 @@ itself. That means these scores only measure the tracking, and they can't be com
 leaderboard scores, which include the detector too and come out a lot lower.
 
 MOTA is the standard tracking score. 1.0 means no mistakes. Waymo's own scoring code produced
-these numbers on three clips from their dataset.
+these numbers on three clips from their dataset:
 
-The last column is a stress test. Real detectors miss objects, so the tracker is also run with
-40% of the detections thrown away at random, to see how well it holds tracks through the gaps.
-
-| scene                       | cars | people | cars, 40% of detections removed |
-|-----------------------------|------|--------|---------------------------------|
-| fast road, 63 km/h          | 0.88 | 0.78   | 0.76                            |
-| crawling through a junction | 0.96 | 0.91   | 0.87                            |
-| slow turn, 21 km/h          | 0.95 | 0.73   | 0.86                            |
-
-With 40% of detections removed, people score 0.59, 0.82 and 0.66 on the same three scenes.
+| scene                       | cars | people |
+|-----------------------------|------|--------|
+| fast road, 63 km/h          | 0.88 | 0.78   |
+| crawling through a junction | 0.96 | 0.91   |
+| slow turn, 21 km/h          | 0.95 | 0.73   |
 
 The fast road is the hardest one. Most of the lost points come from the tracker waiting two
 frames before it trusts a new object, and from tracks that keep going for a moment after the
