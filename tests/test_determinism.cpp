@@ -82,3 +82,40 @@ TEST_CASE("tracker output is byte-identical across two runs with the same seed")
 
   REQUIRE(tracks_identical(first_run.confirmed_tracks_per_frame(), paced_run.confirmed_tracks_per_frame()));
 }
+
+// A perturbation asked for in the settings has to actually reach the tracker. This is here because
+// it once did not: the replay overwrote its own settings with the viewer's untouched sliders on the
+// first frame, so every dropout, noise and latency setting was silently thrown away, and the test
+// above could not see it because both of its runs were crippled in exactly the same way. Comparing a
+// run to itself proves nothing about whether a setting does anything, so this compares runs that
+// were asked for different things and insists they disagree.
+TEST_CASE("a dropout setting changes what the tracker sees") {
+  const SegmentLog segment = make_synthetic_segment(30, 5, 42);
+  const FilterNoise noise{2.0, 0.5, 0.1, 0.02};
+  ConstantTurnRatePredictor predictor(noise);
+
+  const auto run_with_dropout = [&](double dropout) {
+    ReplaySettings settings;
+    settings.tracker.noise = noise;
+    settings.headless = true;
+    settings.seed = 3;
+    settings.perturbation.dropout_probability = dropout;
+    Replay replay(segment, settings, predictor);
+    SnapshotExchange exchange;
+    LiveControls controls;
+    replay.run(exchange, controls);
+    std::size_t total = 0;
+    for (const std::vector<Track>& frame_tracks : replay.confirmed_tracks_per_frame()) total += frame_tracks.size();
+    return total;
+  };
+
+  const std::size_t without_dropout = run_with_dropout(0.0);
+  const std::size_t with_dropout = run_with_dropout(0.5);
+  const std::size_t with_everything_dropped = run_with_dropout(1.0);
+
+  INFO("confirmed track instances without dropout: " << without_dropout);
+  INFO("confirmed track instances at half dropout: " << with_dropout);
+  REQUIRE(without_dropout > 0);
+  REQUIRE(with_dropout < without_dropout);
+  REQUIRE(with_everything_dropped == 0);
+}

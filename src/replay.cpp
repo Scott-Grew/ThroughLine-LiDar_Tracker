@@ -15,6 +15,11 @@
 // real time or driven through as fast as possible, because nothing that changes what the tracker
 // sees is allowed to depend on the wall clock.
 //
+// The live controls a viewer writes to are seeded from the run's own settings before the first
+// frame, so a perturbation asked for on the command line is what the run starts with and the
+// sliders take over from there. Without that the controls would sit at zero and quietly erase
+// every dropout, noise and latency setting a caller asked for.
+//
 // When the run is set to take its detections from the labels rather than from a detector, boxes
 // that the sensor returned no points for are left out. Waymo labels objects it knows are there
 // even when nothing came back from them, and its own scoring ignores those, so handing them to the
@@ -89,6 +94,10 @@ Replay::Replay(const SegmentLog& segment, ReplaySettings settings, const Predict
 // decide what the tracker sees - so a headless run and a paced run at any rate walk through the
 // exact same sequence of tracker calls and produce the exact same confirmed tracks.
 void Replay::run(SnapshotExchange& exchange, LiveControls& controls) {
+  controls.dropout_probability.store(settings_.perturbation.dropout_probability);
+  controls.position_noise_metres.store(settings_.perturbation.position_noise_metres);
+  controls.latency_micros.store(settings_.perturbation.latency_micros);
+
   std::deque<PendingMeasurement> pending;
 
   const std::int64_t frame_period_micros = segment_.frames.size() >= 2
