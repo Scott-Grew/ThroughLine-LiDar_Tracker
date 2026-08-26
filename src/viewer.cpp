@@ -168,21 +168,37 @@ std::vector<foxglove::messages::Point3> ellipse_points(const Eigen::Vector2d& ce
   return points;
 }
 
-// Writes one frame's whole scene to the two channels: the lidar points coloured by height, the ego
-// box, and every confirmed track's box, history, prediction and uncertainty ellipse. Any track that
-// was written on the previous call but is not in this frame's track list is added to this frame's
-// deletions so its box and every one of its primitives disappear from the recording rather than
-// freezing in place. This is the one function both save_replay_recording and, were it ever run live,
-// a live sink would call, so a recording is always built the same way regardless of who asked for
-// it.
-void write_frame(foxglove::messages::PointCloudChannel& points_channel, foxglove::messages::SceneUpdateChannel& scene_channel,
-                  const Frame& frame, const std::vector<Track>& tracks, const std::vector<PredictedPath>& predictions,
-                  const Eigen::Vector3d& origin, std::vector<std::uint64_t>& previously_logged_track_ids) {
+// Writes one frame's whole scene to the three channels: the transform that places the ego frame
+// inside the world frame, the lidar points coloured by height, the ego box, and every confirmed
+// track's box, history, prediction and uncertainty ellipse. Without this transform, "world" is a
+// frame name every other message refers to but nothing ever establishes, so Lichtblick's 3D panel
+// has no display frame to offer and renders nothing. Any track that was written on the previous
+// call but is not in this frame's track list is added to this frame's deletions so its box and
+// every one of its primitives disappear from the recording rather than freezing in place. This is
+// the one function both save_replay_recording and, were it ever run live, a live sink would call,
+// so a recording is always built the same way regardless of who asked for it.
+void write_frame(foxglove::messages::FrameTransformChannel& transform_channel, foxglove::messages::PointCloudChannel& points_channel,
+                  foxglove::messages::SceneUpdateChannel& scene_channel, const Frame& frame, const std::vector<Track>& tracks,
+                  const std::vector<PredictedPath>& predictions, const Eigen::Vector3d& origin,
+                  std::vector<std::uint64_t>& previously_logged_track_ids) {
   const std::uint64_t log_time = to_nanoseconds(frame.capture_time_micros);
   const foxglove::messages::Timestamp timestamp = to_timestamp(frame.capture_time_micros);
 
   const Eigen::Matrix3d rotation = frame.vehicle_to_world.block<3, 3>(0, 0);
   const Eigen::Vector3d translation = frame.vehicle_to_world.block<3, 1>(0, 3);
+  const Eigen::Vector3d ego_translation = translation - origin;
+  const double ego_yaw = std::atan2(rotation(1, 0), rotation(0, 0));
+
+  foxglove::messages::FrameTransform frame_transform;
+  frame_transform.timestamp = timestamp;
+  frame_transform.parent_frame_id = "world";
+  frame_transform.child_frame_id = "ego";
+  frame_transform.translation = foxglove::messages::Vector3{ego_translation.x(), ego_translation.y(), ego_translation.z()};
+  frame_transform.rotation =
+      foxglove::messages::Quaternion{0.0, 0.0, std::sin(ego_yaw / 2.0), std::cos(ego_yaw / 2.0)};
+  const foxglove::FoxgloveError transform_error = transform_channel.log(frame_transform, log_time);
+  if (transform_error != foxglove::FoxgloveError::Ok)
+    throw std::runtime_error(std::string("cannot log frame transform: ") + foxglove::strerror(transform_error));
 
   foxglove::messages::PointCloud point_cloud;
   point_cloud.timestamp = timestamp;
@@ -210,8 +226,6 @@ void write_frame(foxglove::messages::PointCloudChannel& points_channel, foxglove
 
   foxglove::messages::SceneUpdate scene_update;
 
-  const Eigen::Vector3d ego_translation = translation - origin;
-  const double ego_yaw = std::atan2(rotation(1, 0), rotation(0, 0));
   foxglove::messages::SceneEntity ego_entity;
   ego_entity.timestamp = timestamp;
   ego_entity.frame_id = "world";
@@ -419,6 +433,12 @@ void save_replay_recording(const std::string& path, const SegmentLog& segment,
     throw std::runtime_error(std::string("cannot create /points channel: ") + foxglove::strerror(points_channel_result.error()));
   foxglove::messages::PointCloudChannel points_channel = std::move(points_channel_result.value());
 
+  foxglove::FoxgloveResult<foxglove::messages::FrameTransformChannel> transform_channel_result =
+      foxglove::messages::FrameTransformChannel::create("/tf");
+  if (!transform_channel_result.has_value())
+    throw std::runtime_error(std::string("cannot create /tf channel: ") + foxglove::strerror(transform_channel_result.error()));
+  foxglove::messages::FrameTransformChannel transform_channel = std::move(transform_channel_result.value());
+
   foxglove::FoxgloveResult<foxglove::messages::SceneUpdateChannel> scene_channel_result =
       foxglove::messages::SceneUpdateChannel::create("/scene");
   if (!scene_channel_result.has_value())
@@ -434,7 +454,8 @@ void save_replay_recording(const std::string& path, const SegmentLog& segment,
     std::vector<PredictedPath> predictions;
     predictions.reserve(tracks.size());
     for (const Track& track : tracks) predictions.push_back(predictor.predict(track, horizon_seconds, step_seconds));
-    write_frame(points_channel, scene_channel, segment.frames[frame_index], tracks, predictions, origin, previously_logged_track_ids);
+    write_frame(transform_channel, points_channel, scene_channel, segment.frames[frame_index], tracks, predictions, origin,
+                previously_logged_track_ids);
   }
 
   const foxglove::FoxgloveError close_error = writer.close();

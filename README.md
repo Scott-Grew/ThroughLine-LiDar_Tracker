@@ -81,11 +81,12 @@ was given.
 ## Viewing a recording
 
 `--record PATH` writes an MCAP file using the Foxglove C++ SDK's well-known
-schemas (`foxglove.PointCloud` and `foxglove.SceneUpdate`). Open it in
-[Lichtblick](https://github.com/lichtblick-suite/lichtblick/releases), a
+schemas (`foxglove.PointCloud`, `foxglove.SceneUpdate`, and a `/tf` topic of
+`foxglove.FrameTransform` placing the ego frame inside the world frame). Open
+it in [Lichtblick](https://github.com/lichtblick-suite/lichtblick/releases), a
 Foxglove Studio fork with a mac-universal build and no account needed: File
--> Open local file, choose the `.mcap`, add a 3D panel, and set its frame to
-`world`.
+-> Open local file, choose the `.mcap`, add a 3D panel, and set its display
+frame to `world` (or `ego` to have the camera follow the vehicle).
 
 ## Log format
 
