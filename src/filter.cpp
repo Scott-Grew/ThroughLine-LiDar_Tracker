@@ -83,7 +83,10 @@ TrackState initial_state(const Box& box, const FilterNoise& noise) {
 // because a guess is not a sighting. This is what lets a track survive a frame where the object was
 // missed, and it is what draws the predicted path on screen. The jacobian carries the old
 // uncertainty through the motion; the process noise added at the end admits that real cars speed up
-// and brake while this motion model assumes they do not.
+// and brake while this motion model assumes they do not. That unmodelled acceleration acts along
+// the way the object is already facing, so it pushes position and speed together rather than as
+// two separate guesses - the process noise below is built from that single push, not from
+// independent doubts about each number.
 void predict(TrackState& state, double dt_seconds, const FilterNoise& noise) {
   const double yaw = state.mean(2);
   const double speed = state.mean(3);
@@ -113,13 +116,13 @@ void predict(TrackState& state, double dt_seconds, const FilterNoise& noise) {
   jacobian(2, 4) = dt_seconds;
   state.mean(2) = wrap_angle(state.mean(2));
 
-  Eigen::Matrix<double, 5, 5> process_noise = Eigen::Matrix<double, 5, 5>::Zero();
-  const double position_variance = 0.25 * std::pow(noise.sigma_acceleration * dt_seconds * dt_seconds, 2.0);
-  process_noise(0, 0) = position_variance;
-  process_noise(1, 1) = position_variance;
-  process_noise(2, 2) = std::pow(0.5 * noise.sigma_yaw_acceleration * dt_seconds * dt_seconds, 2.0);
-  process_noise(3, 3) = std::pow(noise.sigma_acceleration * dt_seconds, 2.0);
-  process_noise(4, 4) = std::pow(noise.sigma_yaw_acceleration * dt_seconds, 2.0);
+  Eigen::Matrix<double, 5, 1> acceleration_direction;
+  acceleration_direction << 0.5 * dt_seconds * dt_seconds * std::cos(yaw), 0.5 * dt_seconds * dt_seconds * std::sin(yaw), 0.0, dt_seconds, 0.0;
+  Eigen::Matrix<double, 5, 1> yaw_acceleration_direction;
+  yaw_acceleration_direction << 0.0, 0.0, 0.5 * dt_seconds * dt_seconds, 0.0, dt_seconds;
+  const Eigen::Matrix<double, 5, 5> process_noise =
+      noise.sigma_acceleration * noise.sigma_acceleration * acceleration_direction * acceleration_direction.transpose() +
+      noise.sigma_yaw_acceleration * noise.sigma_yaw_acceleration * yaw_acceleration_direction * yaw_acceleration_direction.transpose();
 
   state.covariance = jacobian * state.covariance * jacobian.transpose() + process_noise;
 }
