@@ -118,3 +118,26 @@ project's own in-process monitor. Those numbers are a development aid and are no
 
 The scores that will appear in this section come from Waymo's official tracking evaluator, with
 an established third-party implementation used to check that the monitor agrees with it.
+
+### Checking the monitor against a third-party scorer
+
+`eval/score_external.py` scores a track export using only third-party code: `shapely` computes
+every box's 3D IoU (bird's-eye footprint intersection from `Polygon`, times vertical overlap),
+and `motmetrics` runs the CLEAR MOT accumulation and formulas. Ground truth is read straight out
+of Waymo's `lidar_box` parquet, not from the staged log, so this project's own log format is not
+in the scoring path either.
+
+```
+~/venvs/tracker/bin/pip install "motmetrics==1.4.0" shapely
+./build/tracker --segment PATH --headless --sigma-position 0.036 --sigma-yaw 0.0088 \
+    --seed 1 --export TRACKS.csv
+~/venvs/tracker/bin/python eval/score_external.py --parquet-root ROOT --segment SEGMENT_NAME \
+    --tracks TRACKS.csv --class vehicle --iou-threshold 0.7
+```
+
+`--class` is `vehicle`, `pedestrian` or `cyclist`; `--iou-threshold` is 0.7 for vehicles and 0.5
+for pedestrians and cyclists, matching `metrics.cpp`'s own per-class thresholds.
+
+One convention differs on purpose: `motmetrics` reports MOTP as an average distance (`1 - IoU`,
+lower is better), while `metrics.cpp` reports MOTP as an average IoU (higher is better). The two
+are not the same quantity and this project does not convert between them.
