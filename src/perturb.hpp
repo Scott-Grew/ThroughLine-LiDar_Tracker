@@ -13,6 +13,7 @@ struct PerturbationSettings {
 class Perturbation {
  public:
   Perturbation(PerturbationSettings settings, std::uint64_t seed);
+  void set(PerturbationSettings settings);
   std::vector<Detection> apply(const std::vector<Detection>& detections);
   std::int64_t available_time(std::int64_t capture_time_micros) const;
  private:
