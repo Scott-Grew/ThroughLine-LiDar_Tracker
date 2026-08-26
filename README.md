@@ -110,4 +110,41 @@ that wiring exists.
 
 ## Results
 
-No numbers yet.
+Three validation segments from Waymo Open Dataset Perception v2, staged on 2026-08-25:
+`10203656353524179475_7625_000_7645_000`, `1024360143612057520_3580_000_3600_000`,
+`10247954040621004675_2180_000_2200_000`. 198, 199 and 199 frames at 10 Hz.
+
+Detections come from the labelled boxes, excluding those the sensor returned no points for.
+Measurement noise is the mean of the three segments' own measured box jitter, which the stager
+prints: 0.036 m in position, 0.0088 rad in heading.
+
+MOTA is averaged over the three segments, scored by `metrics.cpp` against Waymo's IoU
+thresholds. This is the in-process monitor, not Waymo's official evaluator; the official
+number is not wired up yet.
+
+| detection dropout | vehicle MOTA | pedestrian MOTA |
+|---|---|---|
+| 0.0 | 0.929 | 0.809 |
+| 0.1 | 0.921 | 0.811 |
+| 0.2 | 0.908 | 0.794 |
+| 0.3 | 0.882 | 0.776 |
+| 0.4 | 0.833 | 0.692 |
+| 0.5 | 0.697 | 0.601 |
+
+Per segment at dropout 0, vehicle MOTA is 0.877, 0.956 and 0.955.
+
+Tracker step time over all 36 runs above: p50 0.07 ms, worst p99 0.632 ms, no frame exceeding
+the 100 ms budget.
+
+Every row came from:
+
+```
+./build/tracker --segment <staged.trklog> --headless \
+    --sigma-position 0.036 --sigma-yaw 0.0088 --dropout <p> --seed 1
+```
+
+A confirmed track is reported while it coasts through frames its object was not detected in.
+Reporting only tracks updated in the current frame removes every false positive but costs more
+than it saves as soon as detections start going missing: vehicle MOTA 0.963 against 0.929 at
+dropout 0, but 0.538 against 0.833 at dropout 0.4. Identity switches are identical either way,
+since what a track reports does not change how it is tracked.
