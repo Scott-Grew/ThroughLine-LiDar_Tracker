@@ -1,6 +1,5 @@
-# This image builds and serves Waymo's own tracking evaluator. It exists because Scott's rule for
-# this project is that nothing we write may compute a score - only Waymo's binary is allowed to
-# produce the number that counts. It clones the waymo-open-dataset repository fresh and compiles
+# This image builds and serves Waymo's own tracking evaluator. Nothing in this project computes a
+# reported score; only Waymo's binary does. It clones the waymo-open-dataset repository fresh and compiles
 # just compute_tracking_metrics_main with bazel, so the binary is byte-for-byte the one Waymo
 # ships, then points the entrypoint at it so run_official.sh has something to run the two Objects
 # proto files through. Nothing in this file decides a metric; it only builds the tool that does.

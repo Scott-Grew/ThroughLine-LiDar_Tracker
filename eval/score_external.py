@@ -129,7 +129,7 @@ def read_predictions(tracks_path, class_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--parquet-root", default=str(pathlib.Path.home() / "waymo-data" / "parquet"))
+    parser.add_argument("--parquet-root", required=True)
     parser.add_argument("--segment", required=True)
     parser.add_argument("--tracks", required=True)
     parser.add_argument("--class", dest="class_name", choices=["vehicle", "pedestrian", "cyclist"], default="vehicle")

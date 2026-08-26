@@ -28,7 +28,8 @@ echo "run_official.sh: building the evaluator image (cached after the first run)
 docker build --platform linux/amd64 -t "$IMAGE_TAG" "$EVAL_DIR"
 
 echo "run_official.sh: converting $TRACKS_CSV to Waymo's Objects proto..." >&2
-~/venvs/tracker/bin/python "$EVAL_DIR/to_waymo_objects.py" \
+"${PYTHON:-python3}" "$EVAL_DIR/to_waymo_objects.py" \
+  --parquet-root "${PARQUET_ROOT:-data/parquet}" \
   --segment "$SEGMENT_NAME" \
   --tracks "$TRACKS_CSV" \
   --out-predictions "$WORK_DIR/predictions.bin" \

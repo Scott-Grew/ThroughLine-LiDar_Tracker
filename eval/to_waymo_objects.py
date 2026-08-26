@@ -98,7 +98,7 @@ def build_prediction_objects(tracks_path, segment):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--parquet-root", default=str(pathlib.Path.home() / "waymo-data" / "parquet"))
+    parser.add_argument("--parquet-root", required=True)
     parser.add_argument("--segment", required=True)
     parser.add_argument("--tracks", required=True)
     parser.add_argument("--out-predictions", required=True)

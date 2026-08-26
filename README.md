@@ -18,7 +18,7 @@ The tracker is given Waymo's hand-labelled boxes as its input. It does not detec
 itself. That means these scores only measure the tracking, and they can't be compared to
 leaderboard scores, which include the detector too and come out a lot lower.
 
-MOTA is the usual tracking score. 1.0 means no mistakes. Waymo's own scoring code produced
+MOTA is the standard tracking score. 1.0 means no mistakes. Waymo's own scoring code produced
 these numbers on three clips from their dataset:
 
 | scene                       | cars | people | cars, 40% of detections removed |
@@ -39,17 +39,14 @@ One frame takes 0.07 milliseconds on average and never more than 0.7. The car gi
 
 Every frame, three steps.
 
-1. Move each known object forward using its last speed and turn rate. It gets a bit less sure
-   where the object is every time it does this. This is a Kalman filter.
-2. Match the new detections to the known objects. Every possible pair gets a cost based on how
-   far off it is compared to how sure the tracker is. Pairs that are too far off are thrown out.
-   The Hungarian algorithm then finds the best set of pairs.
+1. Move each known object forward using its last speed and turn rate, and get a bit less sure
+   where it is.
+2. Match the new detections to the known objects. Pairs that are too far apart are thrown out.
+   The rest are matched so the total distance is as small as possible.
 3. Update matched objects with their new box. Start a new track for any box that didn't match.
    Let unmatched objects coast, and drop them after five misses in a row.
 
-The tracker also reports how sure it is about each object. That is tested over fifty runs to
-make sure it isn't over or under confident. Running the same clip twice gives the exact same
-output, and a test checks that.
+Running the same clip twice gives the exact same output, and a test checks that.
 
 ## Build and test
 
