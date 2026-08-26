@@ -19,7 +19,10 @@ itself. That means these scores only measure the tracking, and they can't be com
 leaderboard scores, which include the detector too and come out a lot lower.
 
 MOTA is the standard tracking score. 1.0 means no mistakes. Waymo's own scoring code produced
-these numbers on three clips from their dataset:
+these numbers on three clips from their dataset.
+
+The last column is a stress test. Real detectors miss objects, so the tracker is also run with
+40% of the detections thrown away at random, to see how well it holds tracks through the gaps.
 
 | scene                       | cars | people | cars, 40% of detections removed |
 |-----------------------------|------|--------|---------------------------------|
