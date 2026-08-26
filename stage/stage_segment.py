@@ -9,21 +9,17 @@ point in the segment.
 """
 
 import argparse
-import hashlib
 import struct
 
 import numpy as np
 import pyarrow.parquet as pq
 
+from waymo_boxes import read_labelled_boxes, stable_object_id
+
 MAGIC = b"TRKLOG02"
 VEHICLE_TYPE = 1
 PEDESTRIAN_TYPE = 2
 CYCLIST_TYPE = 4
-
-
-def stable_object_id(laser_object_id):
-    digest = hashlib.sha1(laser_object_id.encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], byteorder="big")
 
 
 def wrap_angle(radians):
@@ -37,7 +33,6 @@ def wrap_angle(radians):
 def read_components(parquet_root, segment, laser):
     lidar_table = pq.read_table(f"{parquet_root}/lidar/{segment}.parquet")
     calibration_table = pq.read_table(f"{parquet_root}/lidar_calibration/{segment}.parquet")
-    box_table = pq.read_table(f"{parquet_root}/lidar_box/{segment}.parquet")
     pose_table = pq.read_table(f"{parquet_root}/vehicle_pose/{segment}.parquet")
 
     calibration_by_laser = {}
@@ -68,44 +63,20 @@ def read_components(parquet_root, segment, laser):
         points_by_frame[frame_timestamp] = range_image_to_points(range_image_values, range_image_shape, calibration)
 
     ground_truth_by_frame = {}
-    for (
-        frame_timestamp,
-        laser_object_id,
-        center_x,
-        center_y,
-        center_z,
-        size_x,
-        size_y,
-        size_z,
-        heading,
-        object_type,
-        num_lidar_points_in_box,
-    ) in zip(
-        box_table.column("key.frame_timestamp_micros").to_pylist(),
-        box_table.column("key.laser_object_id").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.heading").to_pylist(),
-        box_table.column("[LiDARBoxComponent].type").to_pylist(),
-        box_table.column("[LiDARBoxComponent].num_lidar_points_in_box").to_pylist(),
-    ):
-        if object_type not in (VEHICLE_TYPE, PEDESTRIAN_TYPE, CYCLIST_TYPE):
+    for box in read_labelled_boxes(parquet_root, segment):
+        if box["object_type"] not in (VEHICLE_TYPE, PEDESTRIAN_TYPE, CYCLIST_TYPE):
             continue
-        ground_truth_by_frame.setdefault(frame_timestamp, []).append({
-            "object_id": stable_object_id(laser_object_id),
-            "object_class": object_type,
-            "center_x": center_x,
-            "center_y": center_y,
-            "center_z": center_z,
-            "length": size_x,
-            "width": size_y,
-            "height": size_z,
-            "heading": heading,
-            "num_lidar_points_in_box": num_lidar_points_in_box,
+        ground_truth_by_frame.setdefault(box["frame_timestamp_micros"], []).append({
+            "object_id": stable_object_id(box["laser_object_id"]),
+            "object_class": box["object_type"],
+            "center_x": box["center_x"],
+            "center_y": box["center_y"],
+            "center_z": box["center_z"],
+            "length": box["length"],
+            "width": box["width"],
+            "height": box["height"],
+            "heading": box["heading"],
+            "num_lidar_points_in_box": box["num_lidar_points_in_box"],
         })
 
     pose_by_frame = dict(zip(

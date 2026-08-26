@@ -16,25 +16,18 @@ the difference in direction.
 """
 
 import argparse
-import hashlib
 import pathlib
+import sys
 
 import motmetrics as mm
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 from shapely.geometry import Polygon
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "stage"))
+from waymo_boxes import read_labelled_boxes, stable_object_id
+
 CLASS_NAME_TO_WAYMO_TYPE = {"vehicle": 1, "pedestrian": 2, "cyclist": 4}
-
-
-# motmetrics stores every object id as a float internally, so Waymo's string laser_object_id has
-# to become a number before it can be handed to the accumulator. This is the same hash
-# stage/stage_segment.py already uses to turn the same string into the uint64 the staged log
-# carries, kept identical here so ground truth identity means the same thing on both paths.
-def stable_object_id(laser_object_id):
-    digest = hashlib.sha1(laser_object_id.encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], byteorder="big")
 
 
 # Builds the four corners of a box's bird's-eye footprint from its centre, heading and
@@ -91,46 +84,21 @@ def intersection_over_union_3d(first_box, second_box):
 # same rule, so this keeps the two sides comparable. Returns one dict of per-frame box lists,
 # keyed by frame timestamp, and object identity is Waymo's own laser_object_id string.
 def read_ground_truth(parquet_root, segment, class_name):
-    box_table = pq.read_table(f"{parquet_root}/lidar_box/{segment}.parquet")
     waymo_type = CLASS_NAME_TO_WAYMO_TYPE[class_name]
 
     ground_truth_by_frame = {}
-    for (
-        frame_timestamp,
-        laser_object_id,
-        center_x,
-        center_y,
-        center_z,
-        length,
-        width,
-        height,
-        heading,
-        object_type,
-        num_lidar_points_in_box,
-    ) in zip(
-        box_table.column("key.frame_timestamp_micros").to_pylist(),
-        box_table.column("key.laser_object_id").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.heading").to_pylist(),
-        box_table.column("[LiDARBoxComponent].type").to_pylist(),
-        box_table.column("[LiDARBoxComponent].num_lidar_points_in_box").to_pylist(),
-    ):
-        if object_type != waymo_type or num_lidar_points_in_box <= 0:
+    for box in read_labelled_boxes(parquet_root, segment):
+        if box["object_type"] != waymo_type or box["num_lidar_points_in_box"] <= 0:
             continue
-        ground_truth_by_frame.setdefault(frame_timestamp, []).append({
-            "object_id": stable_object_id(laser_object_id),
-            "center_x": center_x,
-            "center_y": center_y,
-            "center_z": center_z,
-            "length": length,
-            "width": width,
-            "height": height,
-            "heading": heading,
+        ground_truth_by_frame.setdefault(box["frame_timestamp_micros"], []).append({
+            "object_id": stable_object_id(box["laser_object_id"]),
+            "center_x": box["center_x"],
+            "center_y": box["center_y"],
+            "center_z": box["center_z"],
+            "length": box["length"],
+            "width": box["width"],
+            "height": box["height"],
+            "heading": box["heading"],
         })
     return ground_truth_by_frame
 

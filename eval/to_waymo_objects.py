@@ -31,10 +31,12 @@ import pathlib
 import sys
 
 import pandas as pd
-import pyarrow.parquet as pq
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "generated"))
 from waymo_open_dataset.protos import metrics_pb2
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "stage"))
+from waymo_boxes import read_labelled_boxes
 
 TRACKED_WAYMO_TYPES = {1, 2, 4}
 
@@ -45,53 +47,25 @@ TRACKED_WAYMO_TYPES = {1, 2, 4}
 # name and its own frame timestamp so compute_tracking_metrics_main can group objects back into
 # frames, and its identity is Waymo's own laser_object_id string, unchanged.
 def build_ground_truth_objects(parquet_root, segment):
-    box_table = pq.read_table(f"{parquet_root}/lidar_box/{segment}.parquet")
-
     objects = metrics_pb2.Objects()
-    for (
-        frame_timestamp,
-        laser_object_id,
-        center_x,
-        center_y,
-        center_z,
-        length,
-        width,
-        height,
-        heading,
-        object_type,
-        num_lidar_points_in_box,
-        tracking_difficulty,
-    ) in zip(
-        box_table.column("key.frame_timestamp_micros").to_pylist(),
-        box_table.column("key.laser_object_id").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.heading").to_pylist(),
-        box_table.column("[LiDARBoxComponent].type").to_pylist(),
-        box_table.column("[LiDARBoxComponent].num_lidar_points_in_box").to_pylist(),
-        box_table.column("[LiDARBoxComponent].difficulty_level.tracking").to_pylist(),
-    ):
-        if object_type not in TRACKED_WAYMO_TYPES or num_lidar_points_in_box <= 0:
+    for box in read_labelled_boxes(parquet_root, segment):
+        if box["object_type"] not in TRACKED_WAYMO_TYPES or box["num_lidar_points_in_box"] <= 0:
             continue
 
         waymo_object = objects.objects.add()
         waymo_object.context_name = segment
-        waymo_object.frame_timestamp_micros = frame_timestamp
-        waymo_object.object.id = laser_object_id
-        waymo_object.object.type = object_type
-        waymo_object.object.num_lidar_points_in_box = num_lidar_points_in_box
-        waymo_object.object.tracking_difficulty_level = tracking_difficulty if tracking_difficulty is not None else 0
-        waymo_object.object.box.center_x = center_x
-        waymo_object.object.box.center_y = center_y
-        waymo_object.object.box.center_z = center_z
-        waymo_object.object.box.length = length
-        waymo_object.object.box.width = width
-        waymo_object.object.box.height = height
-        waymo_object.object.box.heading = heading
+        waymo_object.frame_timestamp_micros = box["frame_timestamp_micros"]
+        waymo_object.object.id = box["laser_object_id"]
+        waymo_object.object.type = box["object_type"]
+        waymo_object.object.num_lidar_points_in_box = box["num_lidar_points_in_box"]
+        waymo_object.object.tracking_difficulty_level = box["tracking_difficulty"] if box["tracking_difficulty"] is not None else 0
+        waymo_object.object.box.center_x = box["center_x"]
+        waymo_object.object.box.center_y = box["center_y"]
+        waymo_object.object.box.center_z = box["center_z"]
+        waymo_object.object.box.length = box["length"]
+        waymo_object.object.box.width = box["width"]
+        waymo_object.object.box.height = box["height"]
+        waymo_object.object.box.heading = box["heading"]
 
     return objects
 
