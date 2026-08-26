@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 #include "assign.hpp"
 #include "filter.hpp"
@@ -21,8 +22,11 @@ class Tracker {
   const std::vector<Track>& tracks() const;
   std::vector<Track> confirmed_tracks_at(std::int64_t query_time_micros) const;
  private:
+  void predict_all_to(std::int64_t capture_time_micros);
+  static Box to_world(const Box& box, const Eigen::Matrix4d& vehicle_to_world);
+
   TrackerSettings settings_;
   std::vector<Track> tracks_;
   std::uint64_t next_track_id_ = 1;
-  Eigen::MatrixXd cost_;
+  std::unordered_map<ObjectClass, Eigen::MatrixXd> cost_by_class_;
 };
