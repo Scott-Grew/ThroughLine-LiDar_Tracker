@@ -76,19 +76,36 @@ add_library(tracker_core
 target_include_directories(tracker_core PUBLIC src)
 target_link_libraries(tracker_core PUBLIC Eigen3::Eigen)
 
-# Pinned to 0.26.0: Rerun stopped shipping a macOS x86_64 prebuilt library after this release, and
-# this machine is an Intel Mac, so 0.26.0 is the newest version that still links here.
+# Pinned to 0.27.0, the Intel Mac artifact. This dist ships the C library prebuilt
+# (libfoxglove.a/.dylib) and the C++ wrapper as source with a hand-written CMake package config
+# rather than a top-level CMakeLists.txt, so it cannot be pulled in with FetchContent_MakeAvailable's
+# add_subdirectory step - FetchContent_Populate fetches it instead, and find_package plus the
+# config's own foxglove_sdk_add_cpp_library() helper build the wrapper. The wrapper's static
+# archive leaves zstd and lz4 as unresolved symbols for the final link, so those two are found on
+# the system (installed via Homebrew at /usr/local) rather than fetched - the SDK's own CMake does
+# not fetch them itself, and it needs no protobuf or nlohmann_json: encoding happens inside the
+# prebuilt Rust library, not in the C++ wrapper.
 FetchContent_Declare(
-  rerun_sdk
-  URL https://github.com/rerun-io/rerun/releases/download/0.26.0/rerun_cpp_sdk.zip
+  foxglove_sdk
+  URL https://github.com/foxglove/foxglove-sdk/releases/download/sdk/v0.27.0/foxglove-v0.27.0-cpp-x86_64-apple-darwin.zip
 )
-FetchContent_MakeAvailable(rerun_sdk)
+FetchContent_Populate(foxglove_sdk)
+list(APPEND CMAKE_PREFIX_PATH "${foxglove_sdk_SOURCE_DIR}")
+find_package(foxglove-sdk CONFIG REQUIRED)
+foxglove_sdk_add_cpp_library(foxglove_cpp TYPE STATIC REMOTE_ACCESS OFF)
+
+find_library(ZSTD_LIBRARY NAMES zstd PATHS /usr/local/lib)
+find_library(LZ4_LIBRARY NAMES lz4 PATHS /usr/local/lib)
+if(NOT ZSTD_LIBRARY OR NOT LZ4_LIBRARY)
+  message(FATAL_ERROR "foxglove_cpp needs zstd and lz4 (brew install zstd lz4)")
+endif()
+target_link_libraries(foxglove_cpp PUBLIC ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
 
 add_executable(tracker
   src/main.cpp
   src/viewer.cpp
 )
-target_link_libraries(tracker PRIVATE tracker_core imgui rerun_sdk)
+target_link_libraries(tracker PRIVATE tracker_core imgui foxglove_cpp)
 target_compile_definitions(tracker PRIVATE GL_SILENCE_DEPRECATION)
 
 enable_testing()
