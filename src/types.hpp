@@ -58,13 +58,3 @@ struct Track {
   std::uint32_t consecutive_misses;
   std::vector<Eigen::Vector2d> history;
 };
-
-// Lets an ObjectClass be used as an unordered_map key, which the metrics and tracker code both
-// do to keep one running total per object class. The standard library has no built-in hash for
-// an enum, so without this the maps in metrics.hpp and tracker.hpp would not compile.
-template <>
-struct std::hash<ObjectClass> {
-  std::size_t operator()(ObjectClass object_class) const noexcept {
-    return std::hash<std::uint8_t>{}(static_cast<std::uint8_t>(object_class));
-  }
-};

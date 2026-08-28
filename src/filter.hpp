@@ -3,9 +3,13 @@
 #include "types.hpp"
 
 struct FilterNoise {
+  // Unmodelled speed change per frame, m/s^2. Chosen.
   double sigma_acceleration = 2.0;
+  // Unmodelled turn-rate change per frame, rad/s^2. Chosen.
   double sigma_yaw_acceleration = 0.5;
+  // Box centre jitter, metres. Measured per segment by stage_segment.py; 0 is refused.
   double sigma_measurement_position = 0.0;
+  // Box heading jitter, radians. Measured per segment by stage_segment.py.
   double sigma_measurement_yaw = 0.0;
 };
 

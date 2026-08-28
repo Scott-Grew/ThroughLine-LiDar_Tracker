@@ -1,15 +1,14 @@
 #include "assign.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <vector>
+#include <dlib/optimization/max_cost_assignment.h>
 
 // This file answers one question: given a grid of costs between tracks and detections, who goes
 // with whom. The tracker builds one such grid per object class per frame and hands it here; this
 // file hands back a list of matched pairs plus whatever was left over on each side. Two ways of
-// answering are offered - a fast greedy pass that grabs the cheapest pairing first, and the
-// Hungarian algorithm, which is slower but finds the assignment with the lowest total cost across
-// the whole grid. Which one runs is a setting on the tracker, not a decision made in here. Nothing
+// answering are offered - a fast greedy pass that grabs the cheapest pairing first, and dlib's
+// Hungarian solver, which finds the assignment with the lowest total cost across the whole grid. Which one runs is a setting on the tracker, not a decision made in here. Nothing
 // downstream cares how the answer was reached, only which boxes ended up paired.
 
 namespace {
@@ -47,75 +46,39 @@ std::vector<std::pair<int, int>> greedy_pairs(const Eigen::MatrixXd& cost, doubl
   return pairs;
 }
 
-// A cost stood in for anything past the gate, large enough that the optimal search will never
-// choose it over a real pairing but not so large that it breaks the arithmetic below.
-constexpr double kUnreachable = 1e9;
+// Scale applied to costs before handing them to dlib, which solves over integers. Costs are at
+// most the gate (about 11), so a scale of one million keeps six decimal places of resolution.
+constexpr double kCostScale = 1e6;
 
-// The optimal answer: the Jonker-Volgenant form of the Hungarian algorithm, which finds the set
-// of pairings with the lowest possible total cost rather than settling for the first cheap one
-// found. It works on a square problem internally, so a wide grid is transposed to a tall one
-// first and the pairs are flipped back before returning. Costs past the gate are replaced with
-// the unreachable value above so the algorithm can still run its bookkeeping over the whole grid
-// without ever actually choosing a pairing that should have been refused.
+// A reward every pairing under the gate earns on top of its cost, larger than any total the
+// scaled costs can reach, so the solver always prefers one more matched pair over any saving in
+// cost. An unmatched track becomes a miss, which is what the tracker most wants to avoid.
+constexpr long kPairReward = 1000000000000L;
+
+// The optimal answer, from dlib's max_cost_assignment (the Hungarian method). dlib wants a
+// square matrix and maximises, so the rectangular gated cost grid is embedded in a square of
+// zeros where every pairing under the gate scores the pair reward minus its scaled cost, and
+// every pairing past the gate or in the padding scores zero. Pairs the solver lands on padding or
+// gated cells are dropped afterwards.
 std::vector<std::pair<int, int>> hungarian_pairs(const Eigen::MatrixXd& cost, double gate) {
-  const bool transposed = cost.rows() > cost.cols();
-  const Eigen::MatrixXd matrix = transposed ? Eigen::MatrixXd(cost.transpose()) : cost;
-  const int row_count = static_cast<int>(matrix.rows());
-  const int column_count = static_cast<int>(matrix.cols());
-
-  std::vector<double> row_offset(row_count + 1, 0.0), column_offset(column_count + 1, 0.0);
-  std::vector<int> row_of_column(column_count + 1, 0), previous_column(column_count + 1, 0);
-
-  for (int row = 1; row <= row_count; ++row) {
-    row_of_column[0] = row;
-    int current_column = 0;
-    std::vector<double> reduced_minimum(column_count + 1, std::numeric_limits<double>::infinity());
-    std::vector<bool> visited(column_count + 1, false);
-    do {
-      visited[current_column] = true;
-      const int current_row = row_of_column[current_column];
-      double delta = std::numeric_limits<double>::infinity();
-      int next_column = 0;
-      for (int column = 1; column <= column_count; ++column) {
-        if (visited[column]) continue;
-        const double entry = matrix(current_row - 1, column - 1) <= gate ? matrix(current_row - 1, column - 1) : kUnreachable;
-        const double reduced = entry - row_offset[current_row] - column_offset[column];
-        if (reduced < reduced_minimum[column]) {
-          reduced_minimum[column] = reduced;
-          previous_column[column] = current_column;
-        }
-        if (reduced_minimum[column] < delta) {
-          delta = reduced_minimum[column];
-          next_column = column;
-        }
-      }
-      for (int column = 0; column <= column_count; ++column) {
-        if (visited[column]) {
-          row_offset[row_of_column[column]] += delta;
-          column_offset[column] -= delta;
-        } else {
-          reduced_minimum[column] -= delta;
-        }
-      }
-      current_column = next_column;
-    } while (row_of_column[current_column] != 0);
-    do {
-      const int column = previous_column[current_column];
-      row_of_column[current_column] = row_of_column[column];
-      current_column = column;
-    } while (current_column != 0);
-  }
-
+  const long row_count = cost.rows();
+  const long column_count = cost.cols();
+  const long side = std::max(row_count, column_count);
   std::vector<std::pair<int, int>> pairs;
-  for (int column = 1; column <= column_count; ++column) {
-    const int row = row_of_column[column];
-    if (row == 0) continue;
-    const double real_cost = matrix(row - 1, column - 1);
-    if (real_cost > gate) continue;
-    if (transposed) pairs.emplace_back(column - 1, row - 1);
-    else pairs.emplace_back(row - 1, column - 1);
+  if (side == 0) return pairs;
+
+  dlib::matrix<long> reward(side, side);
+  reward = 0;
+  for (long row = 0; row < row_count; ++row)
+    for (long column = 0; column < column_count; ++column)
+      if (cost(row, column) <= gate) reward(row, column) = kPairReward - static_cast<long>(cost(row, column) * kCostScale);
+
+  const std::vector<long> column_of_row = dlib::max_cost_assignment(reward);
+  for (long row = 0; row < row_count; ++row) {
+    const long column = column_of_row[row];
+    if (column >= column_count || cost(row, column) > gate) continue;
+    pairs.emplace_back(static_cast<int>(row), static_cast<int>(column));
   }
-  std::sort(pairs.begin(), pairs.end());
   return pairs;
 }
 

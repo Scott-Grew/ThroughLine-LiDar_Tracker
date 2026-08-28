@@ -8,9 +8,8 @@
 
 // This file is the clock the rest of the project runs on. It walks a staged segment one frame at
 // a time, decides which detections that frame contributes, runs them through the perturbation
-// stage, feeds whatever has actually "arrived" by this frame's time into the tracker, scores the
-// result against ground truth, and hands a snapshot of all of that to whichever thread is drawing
-// the viewer. It is also what makes a run reproducible: the same segment and the same seed walk
+// stage, feeds whatever has actually "arrived" by this frame's time into the tracker, records the
+// result, and hands a snapshot of all of that to whichever thread is drawing the viewer. It is also what makes a run reproducible: the same segment and the same seed walk
 // through exactly the same detections, drops, noise and arrival times whether the run is paced to
 // real time or driven through as fast as possible, because nothing that changes what the tracker
 // sees is allowed to depend on the wall clock.
@@ -51,29 +50,18 @@ double TimingStats::percentile(double fraction) const {
   return sorted_milliseconds[index];
 }
 
-// The buffer the replay thread is currently free to fill in. It is never the buffer the viewer is
-// reading from or the one most recently handed to it, which is what makes this lock-free: the
-// writer and the reader can never collide on the same slot.
-Snapshot& SnapshotExchange::writable() {
-  return buffers_[writing_];
+// Replaces the stored snapshot with the one just produced. The replay thread calls this once per
+// frame; the lock is held only for the move, so the viewer can never observe a half-written frame.
+void SnapshotExchange::publish(Snapshot snapshot) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  latest_ = std::move(snapshot);
 }
 
-// Hands the buffer just filled in over to the reader and takes back whichever buffer the reader is
-// no longer looking at, marking the handed-over one as fresh. This is the only place the writer
-// and the reader touch the same atomic, and it is a single exchange rather than a lock, which is
-// what keeps a slow or paused viewer from ever blocking the replay thread.
-void SnapshotExchange::publish() {
-  writing_ = published_.exchange(writing_ | kFreshFlag, std::memory_order_acq_rel) & ~kFreshFlag;
-}
-
-// Hands the viewer the newest snapshot available. If nothing new has been published since the
-// last call, the same buffer already being read is handed back unchanged, so a viewer running
-// faster than the replay thread simply redraws the same frame rather than tearing into a buffer
-// that is still being written.
-const Snapshot* SnapshotExchange::acquire() {
-  if (!(published_.load(std::memory_order_acquire) & kFreshFlag)) return &buffers_[reading_];
-  reading_ = published_.exchange(reading_, std::memory_order_acq_rel) & ~kFreshFlag;
-  return &buffers_[reading_];
+// Hands the viewer a copy of the newest snapshot. A viewer polling faster than the replay simply
+// receives the same frame again.
+Snapshot SnapshotExchange::acquire() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return latest_;
 }
 
 Replay::Replay(const SegmentLog& segment, ReplaySettings settings, const Predictor& predictor)
@@ -88,7 +76,7 @@ Replay::Replay(const SegmentLog& segment, ReplaySettings settings, const Predict
 // Walks the whole segment once, frame by frame. Each frame's ground truth or detector output is
 // perturbed and queued with the time it would actually become available, whatever in the queue has
 // become available by this frame's capture time is stepped through the tracker, and the confirmed
-// result is scored, recorded and published for the viewer. Wall-clock time is only ever read to
+// result is recorded and published for the viewer. Wall-clock time is only ever read to
 // decide how long to sleep and how a step's duration compares to the pacing budget - never to
 // decide what the tracker sees - so a headless run and a paced run at any rate walk through the
 // exact same sequence of tracker calls and produce the exact same confirmed tracks.
@@ -137,36 +125,29 @@ void Replay::run(SnapshotExchange& exchange, LiveControls& controls) {
     std::vector<Track> tracks_now = tracker_.confirmed_tracks_at(frame.capture_time_micros);
     const auto step_end_time = std::chrono::steady_clock::now();
 
-    metrics_.update(tracks_now, frame.ground_truth, frame.vehicle_to_world);
     confirmed_tracks_per_frame_.push_back(tracks_now);
 
     const double step_milliseconds = std::chrono::duration<double, std::milli>(step_end_time - step_start_time).count();
     timing_.step_milliseconds.push_back(step_milliseconds);
     if (step_milliseconds > pacing_period_seconds * 1000.0) timing_.overruns += 1;
 
-    Snapshot& snapshot = exchange.writable();
+    Snapshot snapshot;
     snapshot.frame_index = frame_index;
     snapshot.frame = &frame;
     snapshot.tracks = tracks_now;
-    snapshot.predictions.clear();
     snapshot.predictions.reserve(tracks_now.size());
     for (const Track& track : tracks_now)
       snapshot.predictions.push_back(predictor_.predict(track, settings_.prediction_horizon_seconds, settings_.prediction_step_seconds));
-    snapshot.metrics = metrics_.per_class();
     snapshot.step_p50_milliseconds = timing_.percentile(0.5);
     snapshot.step_p99_milliseconds = timing_.percentile(0.99);
     snapshot.overruns = timing_.overruns;
-    exchange.publish();
+    exchange.publish(std::move(snapshot));
 
     if (!settings_.headless) {
       const std::chrono::duration<double> elapsed_budget(pacing_period_seconds * static_cast<double>(frame_index + 1));
       std::this_thread::sleep_until(start_time + std::chrono::duration_cast<std::chrono::steady_clock::duration>(elapsed_budget));
     }
   }
-}
-
-const TrackingMetrics& Replay::metrics() const {
-  return metrics_;
 }
 
 const TimingStats& Replay::timing() const {

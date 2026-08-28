@@ -50,17 +50,6 @@ foxglove::messages::Color class_color(ObjectClass object_class) {
   return foxglove::messages::Color{1.0, 1.0, 1.0, 1.0};
 }
 
-// The name a class is filed under in the controls window's metrics text. Nothing about tracking
-// uses this string; it only exists so a human reading the window can tell the three classes apart.
-std::string class_name(ObjectClass object_class) {
-  switch (object_class) {
-    case ObjectClass::Vehicle: return "vehicle";
-    case ObjectClass::Pedestrian: return "pedestrian";
-    case ObjectClass::Cyclist: return "cyclist";
-  }
-  return "unknown";
-}
-
 // The translation of frame 0's vehicle pose, in Waymo's world frame. Every position this file ever
 // writes out has this subtracted from it first, because a segment's world coordinates can sit tens
 // of thousands of metres from the origin and a float only has so many bits of precision to spend -
@@ -324,7 +313,7 @@ void write_frame(foxglove::messages::FrameTransformChannel& transform_channel, f
 
 // Opens a small GLFW/ImGui window of perturbation sliders and loops until that window closes or
 // controls.quit is set from the replay side. Every pass through the loop asks the snapshot
-// exchange for the newest published frame so the printed metrics and timing text stay current; the
+// exchange for the newest published frame so the printed timing text stays current; the
 // sliders write straight into the same atomics the replay thread reads its perturbation settings
 // from, so dragging one takes effect on the very next frame the replay produces. This window draws
 // no part of the scene itself - that only ever happens in the recording save_replay_recording
@@ -353,7 +342,7 @@ int run_viewer(SnapshotExchange& exchange, LiveControls& controls) {
   while (glfwWindowShouldClose(window) == 0 && !controls.quit.load()) {
     glfwPollEvents();
 
-    const Snapshot* snapshot = exchange.acquire();
+    const Snapshot snapshot = exchange.acquire();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -383,13 +372,9 @@ int run_viewer(SnapshotExchange& exchange, LiveControls& controls) {
     if (ImGui::Checkbox("paused", &paused)) controls.paused.store(paused);
 
     ImGui::Separator();
-    ImGui::Text("frame %zu", snapshot->frame_index);
-    for (const auto& [object_class, class_metrics] : snapshot->metrics) {
-      ImGui::Text("%s mota %.3f motp %.3f id_switches %llu", class_name(object_class).c_str(), class_metrics.mota(),
-                  class_metrics.motp(), static_cast<unsigned long long>(class_metrics.id_switches));
-    }
-    ImGui::Text("step p50 %.2f ms p99 %.2f ms overruns %llu", snapshot->step_p50_milliseconds,
-                snapshot->step_p99_milliseconds, static_cast<unsigned long long>(snapshot->overruns));
+    ImGui::Text("frame %zu", snapshot.frame_index);
+    ImGui::Text("step p50 %.2f ms p99 %.2f ms overruns %llu", snapshot.step_p50_milliseconds,
+                snapshot.step_p99_milliseconds, static_cast<unsigned long long>(snapshot.overruns));
 
     ImGui::End();
     ImGui::Render();

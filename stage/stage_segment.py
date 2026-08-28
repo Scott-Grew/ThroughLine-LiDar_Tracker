@@ -23,11 +23,7 @@ CYCLIST_TYPE = 4
 
 
 def wrap_angle(radians):
-    while radians > np.pi:
-        radians -= 2.0 * np.pi
-    while radians < -np.pi:
-        radians += 2.0 * np.pi
-    return radians
+    return float(np.angle(np.exp(1j * radians)))
 
 
 def read_components(parquet_root, segment, laser):

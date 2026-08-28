@@ -45,6 +45,23 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+FetchContent_Declare(
+  cli11
+  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+  GIT_TAG v2.4.2
+)
+FetchContent_MakeAvailable(cli11)
+
+FetchContent_Declare(
+  dlib
+  GIT_REPOSITORY https://github.com/davisking/dlib.git
+  GIT_TAG v19.24.6
+)
+FetchContent_Populate(dlib)
+add_library(dlib_headers INTERFACE)
+target_include_directories(dlib_headers INTERFACE ${dlib_SOURCE_DIR})
+target_compile_definitions(dlib_headers INTERFACE DLIB_NO_GUI_SUPPORT)
+
 find_package(OpenGL REQUIRED)
 
 add_library(imgui STATIC
@@ -67,14 +84,12 @@ add_library(tracker_core
   src/filter.cpp
   src/assign.cpp
   src/tracker.cpp
-  src/iou.cpp
-  src/metrics.cpp
   src/predict.cpp
   src/replay.cpp
   src/export.cpp
 )
 target_include_directories(tracker_core PUBLIC src)
-target_link_libraries(tracker_core PUBLIC Eigen3::Eigen)
+target_link_libraries(tracker_core PUBLIC Eigen3::Eigen dlib_headers)
 
 # Pinned to 0.27.0, the Intel Mac artifact. This dist ships the C library prebuilt
 # (libfoxglove.a/.dylib) and the C++ wrapper as source with a hand-written CMake package config
@@ -105,7 +120,7 @@ add_executable(tracker
   src/main.cpp
   src/viewer.cpp
 )
-target_link_libraries(tracker PRIVATE tracker_core imgui foxglove_cpp)
+target_link_libraries(tracker PRIVATE tracker_core imgui foxglove_cpp CLI11::CLI11)
 target_compile_definitions(tracker PRIVATE GL_SILENCE_DEPRECATION)
 
 enable_testing()
@@ -116,8 +131,6 @@ add_executable(tracker_tests
   tests/test_determinism.cpp
   tests/test_filter.cpp
   tests/test_assign.cpp
-  tests/test_iou.cpp
-  tests/test_metrics.cpp
   tests/test_allocation.cpp
 )
 target_link_libraries(tracker_tests PRIVATE tracker_core Catch2::Catch2WithMain)

@@ -1,10 +1,9 @@
 #pragma once
 #include <atomic>
-#include <array>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 #include "log.hpp"
-#include "metrics.hpp"
 #include "perturb.hpp"
 #include "predict.hpp"
 #include "tracker.hpp"
@@ -30,22 +29,17 @@ struct Snapshot {
   const Frame* frame = nullptr;
   std::vector<Track> tracks;
   std::vector<PredictedPath> predictions;
-  std::unordered_map<ObjectClass, ClassMetrics> metrics;
   double step_p50_milliseconds = 0.0, step_p99_milliseconds = 0.0;
   std::uint64_t overruns = 0;
 };
 
 class SnapshotExchange {
  public:
-  Snapshot& writable();
-  void publish();
-  const Snapshot* acquire();
+  void publish(Snapshot snapshot);
+  Snapshot acquire() const;
  private:
-  static constexpr int kFreshFlag = 4;
-  std::array<Snapshot, 3> buffers_;
-  int writing_ = 0;
-  int reading_ = 1;
-  std::atomic<int> published_{2};
+  mutable std::mutex mutex_;
+  Snapshot latest_;
 };
 
 struct LiveControls {
@@ -60,7 +54,6 @@ class Replay {
  public:
   Replay(const SegmentLog& segment, ReplaySettings settings, const Predictor& predictor);
   void run(SnapshotExchange& exchange, LiveControls& controls);
-  const TrackingMetrics& metrics() const;
   const TimingStats& timing() const;
   const std::vector<std::vector<Track>>& confirmed_tracks_per_frame() const;
  private:
@@ -69,7 +62,6 @@ class Replay {
   const Predictor& predictor_;
   Tracker tracker_;
   Perturbation perturbation_;
-  TrackingMetrics metrics_;
   TimingStats timing_;
   std::vector<std::vector<Track>> confirmed_tracks_per_frame_;
 };

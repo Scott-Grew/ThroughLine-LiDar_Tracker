@@ -55,9 +55,7 @@ Eigen::Matrix3d measurement_noise(const FilterNoise& noise) {
 // this anywhere and the filter sees an enormous error where there is none, and throws away a good
 // track. It is called after every place an angle is added or subtracted.
 double wrap_angle(double radians) {
-  while (radians > M_PI) radians -= 2.0 * M_PI;
-  while (radians < -M_PI) radians += 2.0 * M_PI;
-  return radians;
+  return std::remainder(radians, 2.0 * M_PI);
 }
 
 // Builds the starting five numbers for an object the tracker has just seen for the first time.
