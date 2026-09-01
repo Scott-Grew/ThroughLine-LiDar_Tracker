@@ -26,7 +26,9 @@ def stable_object_id(laser_object_id):
 # filter over the same rows, so filtering here would bake one caller's rule into every caller's
 # data.
 def read_labelled_boxes(parquet_root, segment_name):
-    box_table = pq.read_table(f"{parquet_root}/lidar_box/{segment_name}.parquet")
+    box_table = pq.read_table(
+        f"{parquet_root}/lidar_box/{segment_name}.parquet"
+    )
 
     boxes = []
     for (
@@ -46,28 +48,48 @@ def read_labelled_boxes(parquet_root, segment_name):
         box_table.column("key.frame_timestamp_micros").to_pylist(),
         box_table.column("key.laser_object_id").to_pylist(),
         box_table.column("[LiDARBoxComponent].type").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.center.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.x").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.y").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.size.z").to_pylist(),
-        box_table.column("[LiDARBoxComponent].box.heading").to_pylist(),
-        box_table.column("[LiDARBoxComponent].num_lidar_points_in_box").to_pylist(),
-        box_table.column("[LiDARBoxComponent].difficulty_level.tracking").to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.center.x"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.center.y"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.center.z"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.size.x"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.size.y"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.size.z"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].box.heading"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].num_lidar_points_in_box"
+        ).to_pylist(),
+        box_table.column(
+            "[LiDARBoxComponent].difficulty_level.tracking"
+        ).to_pylist(),
     ):
-        boxes.append({
-            "frame_timestamp_micros": frame_timestamp_micros,
-            "laser_object_id": laser_object_id,
-            "object_type": object_type,
-            "center_x": center_x,
-            "center_y": center_y,
-            "center_z": center_z,
-            "length": length,
-            "width": width,
-            "height": height,
-            "heading": heading,
-            "num_lidar_points_in_box": num_lidar_points_in_box,
-            "tracking_difficulty": tracking_difficulty,
-        })
+        boxes.append(
+            {
+                "frame_timestamp_micros": frame_timestamp_micros,
+                "laser_object_id": laser_object_id,
+                "object_type": object_type,
+                "center_x": center_x,
+                "center_y": center_y,
+                "center_z": center_z,
+                "length": length,
+                "width": width,
+                "height": height,
+                "heading": heading,
+                "num_lidar_points_in_box": num_lidar_points_in_box,
+                "tracking_difficulty": tracking_difficulty,
+            }
+        )
     return boxes

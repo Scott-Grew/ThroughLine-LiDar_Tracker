@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <random>
+#include <vector>
 #include "types.hpp"
 
 struct PerturbationSettings {
@@ -12,9 +13,10 @@ struct PerturbationSettings {
 class Perturbation {
  public:
   Perturbation(PerturbationSettings settings, std::uint64_t seed);
-  void set(PerturbationSettings settings);
-  std::vector<Detection> apply(const std::vector<Detection>& detections);
+  std::vector<Detection> apply(
+      const std::vector<Detection>& detections);
   std::int64_t available_time(std::int64_t capture_time_micros) const;
+
  private:
   PerturbationSettings settings_;
   std::mt19937_64 generator_;

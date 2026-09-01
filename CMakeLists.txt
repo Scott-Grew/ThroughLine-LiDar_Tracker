@@ -28,23 +28,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(catch2)
 
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  glfw
-  GIT_REPOSITORY https://github.com/glfw/glfw.git
-  GIT_TAG 3.4
-)
-FetchContent_MakeAvailable(glfw)
-
-FetchContent_Declare(
-  imgui
-  GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG v1.91.5
-)
-FetchContent_MakeAvailable(imgui)
-
 FetchContent_Declare(
   cli11
   GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
@@ -62,22 +45,6 @@ add_library(dlib_headers INTERFACE)
 target_include_directories(dlib_headers INTERFACE ${dlib_SOURCE_DIR})
 target_compile_definitions(dlib_headers INTERFACE DLIB_NO_GUI_SUPPORT)
 
-find_package(OpenGL REQUIRED)
-
-add_library(imgui STATIC
-  ${imgui_SOURCE_DIR}/imgui.cpp
-  ${imgui_SOURCE_DIR}/imgui_draw.cpp
-  ${imgui_SOURCE_DIR}/imgui_tables.cpp
-  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-)
-target_include_directories(imgui PUBLIC
-  ${imgui_SOURCE_DIR}
-  ${imgui_SOURCE_DIR}/backends
-)
-target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
-
 add_library(tracker_core
   src/log.cpp
   src/perturb.cpp
@@ -91,18 +58,23 @@ add_library(tracker_core
 target_include_directories(tracker_core PUBLIC src)
 target_link_libraries(tracker_core PUBLIC Eigen3::Eigen dlib_headers)
 
-# Pinned to 0.27.0, the Intel Mac artifact. This dist ships the C library prebuilt
-# (libfoxglove.a/.dylib) and the C++ wrapper as source with a hand-written CMake package config
-# rather than a top-level CMakeLists.txt, so it cannot be pulled in with FetchContent_MakeAvailable's
-# add_subdirectory step - FetchContent_Populate fetches it instead, and find_package plus the
-# config's own foxglove_sdk_add_cpp_library() helper build the wrapper. The wrapper's static
-# archive leaves zstd and lz4 as unresolved symbols for the final link, so those two are found on
-# the system (installed via Homebrew at /usr/local) rather than fetched - the SDK's own CMake does
-# not fetch them itself, and it needs no protobuf or nlohmann_json: encoding happens inside the
+# Pinned to 0.27.0, the Intel Mac artifact. This dist ships the C
+# library prebuilt (libfoxglove.a/.dylib) and the C++ wrapper as
+# source with a hand-written CMake package config rather than a
+# top-level CMakeLists.txt, so it cannot be pulled in with
+# FetchContent_MakeAvailable's add_subdirectory step -
+# FetchContent_Populate fetches it instead, and find_package plus
+# the config's own foxglove_sdk_add_cpp_library() helper build the
+# wrapper. The wrapper's static archive leaves zstd and lz4 as
+# unresolved symbols for the final link, so those two are found on
+# the system (installed via Homebrew at /usr/local) rather than
+# fetched - the SDK's own CMake does not fetch them itself, and it
+# needs no protobuf or nlohmann_json: encoding happens inside the
 # prebuilt Rust library, not in the C++ wrapper.
 FetchContent_Declare(
   foxglove_sdk
-  URL https://github.com/foxglove/foxglove-sdk/releases/download/sdk/v0.27.0/foxglove-v0.27.0-cpp-x86_64-apple-darwin.zip
+  URL "https://github.com/foxglove/foxglove-sdk/releases/download/\
+sdk/v0.27.0/foxglove-v0.27.0-cpp-x86_64-apple-darwin.zip"
 )
 FetchContent_Populate(foxglove_sdk)
 list(APPEND CMAKE_PREFIX_PATH "${foxglove_sdk_SOURCE_DIR}")
@@ -114,14 +86,20 @@ find_library(LZ4_LIBRARY NAMES lz4 PATHS /usr/local/lib)
 if(NOT ZSTD_LIBRARY OR NOT LZ4_LIBRARY)
   message(FATAL_ERROR "foxglove_cpp needs zstd and lz4 (brew install zstd lz4)")
 endif()
-target_link_libraries(foxglove_cpp PUBLIC ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
+target_link_libraries(foxglove_cpp PUBLIC
+  ${ZSTD_LIBRARY}
+  ${LZ4_LIBRARY}
+  "-framework IOKit"
+  "-framework CoreFoundation"
+  "-framework Security"
+  "-framework SystemConfiguration"
+)
 
 add_executable(tracker
   src/main.cpp
-  src/viewer.cpp
+  src/recording.cpp
 )
-target_link_libraries(tracker PRIVATE tracker_core imgui foxglove_cpp CLI11::CLI11)
-target_compile_definitions(tracker PRIVATE GL_SILENCE_DEPRECATION)
+target_link_libraries(tracker PRIVATE tracker_core foxglove_cpp CLI11::CLI11)
 
 enable_testing()
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)

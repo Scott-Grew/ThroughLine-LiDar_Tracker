@@ -1,0 +1,13 @@
+BasedOnStyle: Google
+ColumnLimit: 70
+IndentWidth: 2
+AccessModifierOffset: -1
+ReflowComments: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+BinPackParameters: true
+BinPackArguments: true
+DerivePointerAlignment: false
+PointerAlignment: Left
+SortIncludes: false

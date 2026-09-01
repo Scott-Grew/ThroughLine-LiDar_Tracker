@@ -10,4 +10,5 @@ struct Assignment {
   std::vector<int> unmatched_columns;
 };
 
-Assignment assign(const Eigen::MatrixXd& cost, double gate, AssignmentMethod method);
+Assignment assign(const Eigen::MatrixXd& cost, double gate,
+                  AssignmentMethod method);

@@ -9,16 +9,12 @@ struct PredictedPath {
   std::vector<Eigen::Matrix2d> covariances;
 };
 
-class Predictor {
- public:
-  virtual ~Predictor() = default;
-  virtual PredictedPath predict(const Track& track, double horizon_seconds, double step_seconds) const = 0;
-};
-
-class ConstantTurnRatePredictor : public Predictor {
+class ConstantTurnRatePredictor {
  public:
   explicit ConstantTurnRatePredictor(FilterNoise noise);
-  PredictedPath predict(const Track& track, double horizon_seconds, double step_seconds) const override;
+  PredictedPath predict(const Track& track, double horizon_seconds,
+                        double step_seconds) const;
+
  private:
   FilterNoise noise_;
 };

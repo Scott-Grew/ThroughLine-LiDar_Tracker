@@ -4,32 +4,30 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
-#include <thread>
 
-// This file is the clock the rest of the project runs on. It walks a staged segment one frame at
-// a time, decides which detections that frame contributes, runs them through the perturbation
-// stage, feeds whatever has actually "arrived" by this frame's time into the tracker, records the
-// result, and hands a snapshot of all of that to whichever thread is drawing the viewer. It is also what makes a run reproducible: the same segment and the same seed walk
-// through exactly the same detections, drops, noise and arrival times whether the run is paced to
-// real time or driven through as fast as possible, because nothing that changes what the tracker
-// sees is allowed to depend on the wall clock.
+// This file walks a staged segment one frame at a time: it turns the
+// frame's labelled boxes into detections, runs them through the
+// perturbation stage, queues them with the time they would actually
+// arrive, steps the tracker with everything that has arrived by this
+// frame's time, and records the confirmed tracks for that frame.
+// Nothing the tracker sees depends on the wall clock, so the same
+// segment and seed always produce the same tracks; the clock is read
+// only to time each step.
 //
-// The live controls a viewer writes to are seeded from the run's own settings before the first
-// frame, so a perturbation asked for on the command line is what the run starts with and the
-// sliders take over from there. Without that the controls would sit at zero and quietly erase
-// every dropout, noise and latency setting a caller asked for.
-//
-// Detections are always the ground-truth labels: boxes the sensor returned no points for are left
-// out. Waymo labels objects it knows are there even when nothing came back from them, and its own
-// scoring ignores those, so handing them to the tracker would give it knowledge no detector could
-// have and then count every one of them against it as an object it invented.
+// Detections are always the ground-truth labels: boxes the sensor
+// returned no points for are left out. Waymo labels objects it knows
+// are there even when nothing came back from them, and its own
+// scoring ignores those, so handing them to the tracker would give it
+// knowledge no detector could have and then count every one of them
+// against it as an object it invented.
 
 namespace {
 
-// One frame's detections, sitting in the queue between being perturbed and being handed to the
-// tracker. It carries its own capture time and its own vehicle pose because by the time its
-// arrival time comes due, the replay loop may already be looking at a later frame's pose - a late
-// detection must still be placed using the pose of the frame it was actually captured in.
+// One frame's detections, waiting between being perturbed and being
+// handed to the tracker. It carries its own capture time and its own
+// vehicle pose because by the time it arrives the replay may be on a
+// later frame - a late detection must still be placed using the pose
+// of the frame it was actually captured in.
 struct PendingMeasurement {
   std::int64_t available_time_micros;
   std::int64_t capture_time_micros;
@@ -37,116 +35,78 @@ struct PendingMeasurement {
   Eigen::Matrix4d vehicle_to_world;
 };
 
-}
+}  // namespace
 
-// The value at a given fraction through the sorted samples seen so far, which is how the step
-// timings below turn into the p50 and p99 the viewer and the summary line report. An empty run
-// has no timings to report a percentile of.
+// The value at a given fraction through the sorted samples, which is
+// how the step timings become the p50 and p99 the summary line
+// reports.
 double TimingStats::percentile(double fraction) const {
   if (step_milliseconds.empty()) return 0.0;
   std::vector<double> sorted_milliseconds = step_milliseconds;
   std::sort(sorted_milliseconds.begin(), sorted_milliseconds.end());
-  const std::size_t index = static_cast<std::size_t>(std::floor(fraction * static_cast<double>(sorted_milliseconds.size() - 1)));
+  const std::size_t index = static_cast<std::size_t>(std::floor(
+      fraction *
+      static_cast<double>(sorted_milliseconds.size() - 1)));
   return sorted_milliseconds[index];
 }
 
-// Replaces the stored snapshot with the one just produced. The replay thread calls this once per
-// frame; the lock is held only for the move, so the viewer can never observe a half-written frame.
-void SnapshotExchange::publish(Snapshot snapshot) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  latest_ = std::move(snapshot);
-}
-
-// Hands the viewer a copy of the newest snapshot. A viewer polling faster than the replay simply
-// receives the same frame again.
-Snapshot SnapshotExchange::acquire() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return latest_;
-}
-
-Replay::Replay(const SegmentLog& segment, ReplaySettings settings, const Predictor& predictor)
+Replay::Replay(const SegmentLog& segment, ReplaySettings settings)
     : segment_(segment),
-      settings_(settings),
-      predictor_(predictor),
       tracker_(settings.tracker),
       perturbation_(settings.perturbation, settings.seed) {
   confirmed_tracks_per_frame_.reserve(segment.frames.size());
 }
 
-// Walks the whole segment once, frame by frame. Each frame's ground truth or detector output is
-// perturbed and queued with the time it would actually become available, whatever in the queue has
-// become available by this frame's capture time is stepped through the tracker, and the confirmed
-// result is recorded and published for the viewer. Wall-clock time is only ever read to
-// decide how long to sleep and how a step's duration compares to the pacing budget - never to
-// decide what the tracker sees - so a headless run and a paced run at any rate walk through the
-// exact same sequence of tracker calls and produce the exact same confirmed tracks.
-void Replay::run(SnapshotExchange& exchange, LiveControls& controls) {
-  controls.dropout_probability.store(settings_.perturbation.dropout_probability);
-  controls.position_noise_metres.store(settings_.perturbation.position_noise_metres);
-  controls.latency_micros.store(settings_.perturbation.latency_micros);
-
+// For each frame: drop zero-point boxes, perturb, queue with arrival
+// time, step the tracker on everything that has arrived, record what
+// it confirmed, and time the step against the frame period.
+void Replay::run() {
   std::deque<PendingMeasurement> pending;
 
-  const std::int64_t frame_period_micros = segment_.frames.size() >= 2
-                                                ? segment_.frames[1].capture_time_micros - segment_.frames[0].capture_time_micros
-                                                : 100000;
-  const double pacing_period_seconds = static_cast<double>(frame_period_micros) / 1e6 / settings_.rate;
-  const auto start_time = std::chrono::steady_clock::now();
+  const std::int64_t frame_period_micros =
+      segment_.frames.size() >= 2
+          ? segment_.frames[1].capture_time_micros -
+                segment_.frames[0].capture_time_micros
+          : 100000;
+  const double frame_period_milliseconds =
+      static_cast<double>(frame_period_micros) / 1000.0;
 
-  for (std::size_t frame_index = 0; frame_index < segment_.frames.size(); ++frame_index) {
-    const Frame& frame = segment_.frames[frame_index];
-
-    while (controls.paused.load() && !controls.quit.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    if (controls.quit.load()) break;
-
-    PerturbationSettings live_perturbation;
-    live_perturbation.dropout_probability = controls.dropout_probability.load();
-    live_perturbation.position_noise_metres = controls.position_noise_metres.load();
-    live_perturbation.latency_micros = controls.latency_micros.load();
-    perturbation_.set(live_perturbation);
-
+  for (const Frame& frame : segment_.frames) {
     std::vector<Detection> source_detections;
     source_detections.reserve(frame.ground_truth.size());
     for (const GroundTruthBox& truth : frame.ground_truth) {
       if (truth.lidar_points_in_box <= 0) continue;
-      source_detections.push_back(Detection{truth.object_class, truth.box, 1.0f});
+      source_detections.push_back(
+          Detection{truth.object_class, truth.box, 1.0f});
     }
-
-    pending.push_back(PendingMeasurement{perturbation_.available_time(frame.capture_time_micros),
-                                          frame.capture_time_micros,
-                                          perturbation_.apply(source_detections),
-                                          frame.vehicle_to_world});
+    pending.push_back(PendingMeasurement{
+        perturbation_.available_time(frame.capture_time_micros),
+        frame.capture_time_micros,
+        perturbation_.apply(source_detections),
+        frame.vehicle_to_world});
 
     const auto step_start_time = std::chrono::steady_clock::now();
-    while (!pending.empty() && pending.front().available_time_micros <= frame.capture_time_micros) {
-      tracker_.step(pending.front().capture_time_micros, pending.front().detections, pending.front().vehicle_to_world);
+    while (!pending.empty() &&
+           pending.front().available_time_micros <=
+               frame.capture_time_micros) {
+      tracker_.step(pending.front().capture_time_micros,
+                    pending.front().detections,
+                    pending.front().vehicle_to_world);
       pending.pop_front();
     }
-    std::vector<Track> tracks_now = tracker_.confirmed_tracks_at(frame.capture_time_micros);
+    std::vector<Track> tracks_now =
+        tracker_.confirmed_tracks_at(frame.capture_time_micros);
     const auto step_end_time = std::chrono::steady_clock::now();
 
-    confirmed_tracks_per_frame_.push_back(tracks_now);
+    confirmed_tracks_per_frame_.push_back(std::move(tracks_now));
 
-    const double step_milliseconds = std::chrono::duration<double, std::milli>(step_end_time - step_start_time).count();
+    const double step_milliseconds =
+        std::chrono::duration<double, std::milli>(step_end_time -
+                                                  step_start_time)
+            .count();
     timing_.step_milliseconds.push_back(step_milliseconds);
-    if (step_milliseconds > pacing_period_seconds * 1000.0) timing_.overruns += 1;
-
-    Snapshot snapshot;
-    snapshot.frame_index = frame_index;
-    snapshot.frame = &frame;
-    snapshot.tracks = tracks_now;
-    snapshot.predictions.reserve(tracks_now.size());
-    for (const Track& track : tracks_now)
-      snapshot.predictions.push_back(predictor_.predict(track, settings_.prediction_horizon_seconds, settings_.prediction_step_seconds));
-    snapshot.step_p50_milliseconds = timing_.percentile(0.5);
-    snapshot.step_p99_milliseconds = timing_.percentile(0.99);
-    snapshot.overruns = timing_.overruns;
-    exchange.publish(std::move(snapshot));
-
-    if (!settings_.headless) {
-      const std::chrono::duration<double> elapsed_budget(pacing_period_seconds * static_cast<double>(frame_index + 1));
-      std::this_thread::sleep_until(start_time + std::chrono::duration_cast<std::chrono::steady_clock::duration>(elapsed_budget));
-    }
+    if (step_milliseconds > frame_period_milliseconds)
+      timing_.overruns += 1;
   }
 }
 
@@ -154,6 +114,7 @@ const TimingStats& Replay::timing() const {
   return timing_;
 }
 
-const std::vector<std::vector<Track>>& Replay::confirmed_tracks_per_frame() const {
+const std::vector<std::vector<Track>>&
+Replay::confirmed_tracks_per_frame() const {
   return confirmed_tracks_per_frame_;
 }
