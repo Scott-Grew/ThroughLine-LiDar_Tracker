@@ -1,18 +1,6 @@
 """
-This script scores a tracker export against Waymo's own ground truth parquet, using only
-third-party code for every step that decides the number: shapely computes the box overlaps and
-motmetrics runs the CLEAR MOT accumulation and metric formulas. Nothing here reimplements IoU,
-matching or MOTA - that is the whole point of this file. It reads ground truth straight out of
-`lidar_box` parquet rather than from a staged log, so the project's own staging format is not in
-the scoring path either, and it reads the tracker's CSV export rather than any in-process state,
-so the tracker's own `metrics.cpp` is not in the scoring path either. This is meant to run
-side by side with `metrics.cpp` as an independent check, never to replace it as the tool that
-prints numbers during development.
-
-One convention to flag: motmetrics reports MOTP as an average DISTANCE (1 - IoU, lower is better),
-while `metrics.cpp` reports MOTP as an average IoU (higher is better). The two numbers are not the
-same quantity and this script does not convert between them - whoever reads both has to remember
-the difference in direction.
+Scores a tracker export against Waymo's ground truth via shapely
+and motmetrics; motmetrics' MOTP is 1-IoU, opposite metrics.cpp.
 """
 
 import argparse
@@ -36,9 +24,8 @@ CLASS_NAME_TO_WAYMO_TYPE = {
 }
 
 
-# Builds the four corners of a box's bird's-eye footprint from its centre, heading and
-# length/width, in the order shapely needs to close a polygon (a Polygon repeats its first point
-# as its last automatically, so four corners are enough).
+# Returns the box's bird's-eye footprint as a shapely Polygon
+# from its four corners, centre, length/width and heading.
 def footprint_polygon(center_x, center_y, length, width, heading):
     half_length = length / 2.0
     half_width = width / 2.0
@@ -60,11 +47,8 @@ def footprint_polygon(center_x, center_y, length, width, heading):
     return Polygon(world_corners)
 
 
-# 3D IoU of two boxes: the footprint polygons give the intersection area, the two z ranges give
-# the vertical overlap, and multiplying the two gives an intersection volume. Union is the sum of
-# the two boxes' own volumes minus that intersection. Two boxes with no vertical overlap or no
-# footprint overlap score zero rather than dividing by a zero union, which only happens if both
-# boxes have zero volume.
+# 3D IoU: footprint-polygon intersection area times vertical
+# overlap, over the two boxes' volumes; 0.0 if either is zero.
 def intersection_over_union_3d(first_box, second_box):
     first_footprint = footprint_polygon(
         first_box["center_x"],
@@ -119,11 +103,8 @@ def intersection_over_union_3d(first_box, second_box):
     return intersection_volume / union_volume
 
 
-# Reads Waymo's own lidar_box parquet for one segment and keeps only the rows that match the
-# requested class and carry at least one lidar point, which is Waymo's own eligibility rule for
-# whether a labelled box counts as a scorable object - the tracker's input already applies the
-# same rule, so this keeps the two sides comparable. Returns one dict of per-frame box lists,
-# keyed by frame timestamp, and object identity is Waymo's own laser_object_id string.
+# Reads Waymo's lidar_box parquet for one class, keeping only
+# boxes with a lidar point; ids are hashed via stable_object_id.
 def read_ground_truth(parquet_root, segment, class_name):
     waymo_type = CLASS_NAME_TO_WAYMO_TYPE[class_name]
 
@@ -151,10 +132,8 @@ def read_ground_truth(parquet_root, segment, class_name):
     return ground_truth_by_frame
 
 
-# Reads the tracker's CSV export and keeps only the rows for the requested class. The CSV is
-# already in the vehicle frame of each frame, the same frame lidar_box ground truth is published
-# in, so no coordinate transform happens here - see the report for how that was verified against
-# export.cpp. Returns the same per-frame shape read_ground_truth does, keyed by track id.
+# Reads the tracker's CSV export for one class; already in the
+# same per-frame vehicle frame as the ground truth boxes.
 def read_predictions(tracks_path, class_name):
     waymo_type = CLASS_NAME_TO_WAYMO_TYPE[class_name]
     tracks_table = pd.read_csv(tracks_path)
@@ -181,6 +160,8 @@ def read_predictions(tracks_path, class_name):
     return predictions_by_frame
 
 
+# CLI entry point: accumulates per-frame matches into motmetrics
+# and prints the CLEAR MOT summary.
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required=True)

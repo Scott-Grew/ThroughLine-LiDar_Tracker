@@ -1,29 +1,6 @@
 """
-This script turns the tracker's CSV export and Waymo's own lidar_box parquet into the two binary
-files compute_tracking_metrics_main reads: one serialized Objects proto of predictions, one of
-ground truth. It computes no metric and makes no matching decision - it only repacks fields that
-already exist, in the units and identities they already carry, into the proto Waymo's evaluator
-expects. The evaluator itself is the only thing in this project allowed to produce a score.
-
-Both inputs are already in the per-frame vehicle frame: export.cpp converts every confirmed track
-out of the tracker's world frame and back into the vehicle frame of the frame it was seen in before
-writing the CSV, and the lidar_box parquet columns read below are Waymo's own box coordinates,
-published in that same per-frame vehicle frame. score_external.py already relies on this and notes
-it directly; nothing here needs to transform a coordinate.
-
-Object identity differs by file on purpose. A prediction's identity is this project's own track id,
-so it is written as the decimal string of the tracker's uint64. A ground truth object's identity is
-Waymo's own label id string, key.laser_object_id, written back unchanged - unlike
-stage_segment.py's staged log and score_external.py's motmetrics accumulator, neither of which can
-hold a string id and so both hash it into a number first. Waymo's own Label.id field is a string,
-so that hashing step has no reason to happen here.
-
-compute_tracking_metrics_main.cc reads ground truth tracking difficulty straight from each object's
-tracking_difficulty_level field - it does no auto-computation from num_lidar_points_in_box the way
-compute_detection_metrics_main.cc does for detection difficulty. That field is still written here,
-both because it is already on hand and because it is this project's own eligibility rule, shared
-with score_external.py and the staged log: a labelled box the sensor returned no points for is not
-a scorable object.
+Packs the tracker's CSV export and Waymo's lidar_box parquet into
+the two Objects protos compute_tracking_metrics_main reads.
 """
 
 import argparse
@@ -45,11 +22,8 @@ from waymo_boxes import read_labelled_boxes
 TRACKED_WAYMO_TYPES = {1, 2, 4}
 
 
-# Builds one ground truth Objects proto from Waymo's own lidar_box parquet for one segment, keeping
-# only vehicle, pedestrian and cyclist boxes the sensor returned at least one point for - the same
-# subset this project's tracker is ever asked to track. Every object carries the segment's context
-# name and its own frame timestamp so compute_tracking_metrics_main can group objects back into
-# frames, and its identity is Waymo's own laser_object_id string, unchanged.
+# Builds one ground truth Objects proto from Waymo's lidar_box
+# parquet; identity stays Waymo's own laser_object_id string.
 def build_ground_truth_objects(parquet_root, segment):
     objects = metrics_pb2.Objects()
     for box in read_labelled_boxes(parquet_root, segment):
@@ -85,10 +59,8 @@ def build_ground_truth_objects(parquet_root, segment):
     return objects
 
 
-# Builds one predictions Objects proto from the tracker's CSV export. Every row becomes one Object
-# with score fixed at 1.0, since this tracker never expresses detection confidence, and identity
-# set to the decimal string of its track id - the tracking identity compute_tracking_metrics_main
-# uses to decide whether a track kept the same id across frames.
+# Builds one predictions Objects proto from the tracker's CSV
+# export; score is fixed at 1.0, id is the track id as a string.
 def build_prediction_objects(tracks_path, segment):
     tracks_table = pd.read_csv(tracks_path)
 
@@ -113,6 +85,8 @@ def build_prediction_objects(tracks_path, segment):
     return objects
 
 
+# CLI entry point: builds both protos and writes each to its own
+# file.
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required=True)

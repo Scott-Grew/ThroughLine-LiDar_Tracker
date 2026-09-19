@@ -3,35 +3,24 @@
 #include <fstream>
 #include <stdexcept>
 
-// This file is the only place the staged binary log format is read or
-// written. stage_segment.py writes it from Waymo's parquet
-// components, and write_segment_log/read_segment_log here are its
-// only reader and writer on the C++ side - everything downstream
-// works with a SegmentLog in memory and never touches the bytes
-// directly. The layout is little-endian throughout: a fixed header
-// carrying the frame count, the segment name and the two box-jitter
-// sigmas the stager measured, then one record per frame holding that
-// frame's pose, its lidar points as plain x, y, z float32 triples,
-// and its ground truth boxes. The magic string is bumped whenever the
-// layout changes, so a log staged under an older layout is refused
-// outright instead of being silently misread.
+// Reads and writes the staged binary log that stage_segment.py
+// writes in the same layout from Python.
 
 namespace {
 
+// Bumped whenever the layout changes, so a log staged under an
+// older layout is refused instead of silently misread.
 constexpr char kMagic[8] = {'T', 'R', 'K', 'L', 'O', 'G', '0', '3'};
 
-// Writes one value of any fixed-size type as its raw bytes. Every
-// scalar field in the format goes through this, so the layout below
-// is exactly the memory layout of whatever type is passed in.
+// Writes one fixed-size value as its raw bytes; every scalar field
+// in the format goes through this.
 template <typename Value>
 void write_value(std::ofstream& stream, const Value& value) {
   stream.write(reinterpret_cast<const char*>(&value), sizeof(Value));
 }
 
-// The other half of write_value: reads one value's raw bytes back
-// out. Throws if the stream ran out before a full value was
-// available, which is what turns a truncated file into a clear error
-// instead of a silently half-read struct.
+// Reads one value's raw bytes back; throws on a truncated stream
+// instead of returning a silently half-read struct.
 template <typename Value>
 Value read_value(std::ifstream& stream) {
   Value value;
@@ -67,12 +56,8 @@ Box read_box(std::ifstream& stream) {
 
 }  // namespace
 
-// Writes a whole segment: the magic and header first, then one record
-// per frame - its capture time, its 4x4 pose in row-major order, its
-// points as raw x, y, z float32 triples, and its ground truth boxes.
-// stage_segment.py writes the exact same layout from Python, and the
-// two are checked against each other by round-tripping a staged
-// segment through both.
+// Writes the magic and header, then per frame its pose, its
+// points, and its ground truth boxes, all little-endian.
 void write_segment_log(const std::string& path,
                        const SegmentLog& segment) {
   std::ofstream stream(path, std::ios::binary);
@@ -107,10 +92,8 @@ void write_segment_log(const std::string& path,
   }
 }
 
-// Reads a whole segment back, refusing anything whose magic does not
-// match this file's current layout - which is what makes a log staged
-// under an older format fail loudly here rather than being read as if
-// its bytes meant something they do not.
+// Reads a whole segment back, refusing anything whose magic does
+// not match, so a log staged under an older layout fails loudly.
 SegmentLog read_segment_log(const std::string& path) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream) throw std::runtime_error("cannot open " + path);

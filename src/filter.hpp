@@ -2,16 +2,19 @@
 #include <Eigen/Dense>
 #include "types.hpp"
 
+// Declares the extended Kalman filter tracker.cpp runs per track:
+// state initialisation, prediction, and measurement update.
+
+// Process and measurement noise the filter uses to weigh a
+// prediction against a measurement.
 struct FilterNoise {
-  // Unmodelled speed change per frame, m/s^2. Chosen.
+  // Unmodelled acceleration per frame; grows uncertainty between
+  // measurements. Chosen: linear in m/s^2, yaw in rad/s^2.
   double sigma_acceleration = 2.0;
-  // Unmodelled turn-rate change per frame, rad/s^2. Chosen.
   double sigma_yaw_acceleration = 0.5;
-  // Box centre jitter, metres. Measured per segment by
-  // stage_segment.py; 0 is refused.
+  // Box jitter, measured per segment by stage_segment.py. Position in
+  // metres, yaw in radians; a zero position sigma is refused.
   double sigma_measurement_position = 0.0;
-  // Box heading jitter, radians. Measured per segment by
-  // stage_segment.py.
   double sigma_measurement_yaw = 0.0;
 };
 

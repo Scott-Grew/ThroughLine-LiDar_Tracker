@@ -4,34 +4,21 @@
 #include <vector>
 #include <dlib/optimization/max_cost_assignment.h>
 
-// This file answers one question: given a grid of costs between
-// tracks and detections, who goes with whom. The tracker builds one
-// such grid per object class per frame and hands it here; this file
-// hands back a list of matched pairs plus whatever was left over on
-// each side. Two ways of answering are offered - a fast greedy pass
-// that grabs the cheapest pairing first, and dlib's Hungarian solver,
-// which finds the assignment with the lowest total cost across the
-// whole grid. Which one runs is a setting on the tracker, not a
-// decision made in here. Nothing downstream cares how the answer was
-// reached, only which boxes ended up paired.
+// Matches a track/detection cost grid into pairs, by a greedy
+// pass or dlib's Hungarian solver; the tracker picks which.
 
 namespace {
 
-// One possible pairing and what it would cost, used only while the
-// greedy method is picking through every option in order from
-// cheapest to most expensive.
+// One candidate pairing and its cost, used only while the greedy
+// method walks options from cheapest to most expensive.
 struct Candidate {
   double cost;
   int row;
   int column;
 };
 
-// The fast, approximate answer: sort every pairing under the gate
-// from cheapest to most expensive, then walk that list taking each
-// pairing whose row and column are both still free. This can miss a
-// lower-cost arrangement that the optimal method would have found,
-// because an early cheap pairing can block a row or column that a
-// later, better combination needed.
+// Takes pairings under the gate cheapest first, keeping ones whose
+// row and column are still free; can miss a cheaper overall match.
 std::vector<std::pair<int, int>> greedy_pairs(
     const Eigen::MatrixXd& cost, double gate) {
   std::vector<Candidate> candidates;
@@ -60,25 +47,16 @@ std::vector<std::pair<int, int>> greedy_pairs(
   return pairs;
 }
 
-// Scale applied to costs before handing them to dlib, which solves
-// over integers. Costs are at most the gate (about 11), so a scale of
-// one million keeps six decimal places of resolution.
+// dlib solves over integers; costs are at most the gate (about
+// 11), so this scale keeps six decimal places of resolution.
 constexpr double kCostScale = 1e6;
 
-// A reward every pairing under the gate earns on top of its cost,
-// larger than any total the scaled costs can reach, so the solver
-// always prefers one more matched pair over any saving in cost. An
-// unmatched track becomes a miss, which is what the tracker most
-// wants to avoid.
+// Bonus every gated pairing earns on top of its cost, bigger
+// than any total the scaled costs reach, so a match always wins.
 constexpr long kPairReward = 1000000000000L;
 
-// The optimal answer, from dlib's max_cost_assignment (the Hungarian
-// method). dlib wants a square matrix and maximises, so the
-// rectangular gated cost grid is embedded in a square of zeros where
-// every pairing under the gate scores the pair reward minus its
-// scaled cost, and every pairing past the gate or in the padding
-// scores zero. Pairs the solver lands on padding or gated cells are
-// dropped afterwards.
+// The optimal answer, from dlib's Hungarian solver over a square
+// embedding of the rectangular gated grid; see the note below.
 std::vector<std::pair<int, int>> hungarian_pairs(
     const Eigen::MatrixXd& cost, double gate) {
   const long row_count = cost.rows();
@@ -87,6 +65,8 @@ std::vector<std::pair<int, int>> hungarian_pairs(
   std::vector<std::pair<int, int>> pairs;
   if (side == 0) return pairs;
 
+  // Padding rows and columns stay zero, so dlib never prefers
+  // them over a real gated pairing's positive reward.
   dlib::matrix<long> reward(side, side);
   reward = 0;
   for (long row = 0; row < row_count; ++row)
@@ -109,12 +89,8 @@ std::vector<std::pair<int, int>> hungarian_pairs(
 
 }  // namespace
 
-// The entry point everything else calls. Runs whichever method was
-// asked for, then works out from the resulting pairs which rows and
-// columns never got matched at all. The tracker treats an unmatched
-// track as a possible miss and an unmatched detection as a possible
-// new object, so this bookkeeping is what feeds the track life cycle
-// in tracker.cpp.
+// Runs the requested method, then derives which rows and columns
+// were left unmatched; feeds the track life cycle in tracker.cpp.
 Assignment assign(const Eigen::MatrixXd& cost, double gate,
                   AssignmentMethod method) {
   Assignment assignment;

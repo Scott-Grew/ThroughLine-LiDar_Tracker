@@ -1,30 +1,20 @@
-"""
-This file reads Waymo's own lidar_box parquet for one segment, once, in the shape every caller
-that needs ground truth boxes agrees on: one plain dict per row, carrying every column the box
-table has and no class or point-count filter applied. stage_segment.py, eval/score_external.py
-and eval/to_waymo_objects.py each used to read this same parquet table themselves, each with its
-own slightly different set of columns and its own filter baked into the read. This is the one
-place that read happens now; every caller applies its own filter to the rows this returns.
-"""
+# Reads Waymo's lidar_box parquet for one segment into one plain
+# dict per row, unfiltered; every caller applies its own filter.
 
 import hashlib
 
 import pyarrow.parquet as pq
 
 
-# Waymo's ground truth object ids are strings (key.laser_object_id); the staged log and the
-# motmetrics accumulator both used by this project can only carry a number as an object's
-# identity, so both hash the same string into the same uint64 through this function, kept in one
-# place so the two paths can never drift into hashing the same object into two different numbers.
+# Hashes a laser_object_id string into the uint64 identity the
+# staged log and the motmetrics accumulator both use.
 def stable_object_id(laser_object_id):
     digest = hashlib.sha1(laser_object_id.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big")
 
 
-# Reads every row of one segment's lidar_box parquet table into a plain dict per row, applying no
-# filter at all - not on object type, not on lidar point count. Every caller wants a different
-# filter over the same rows, so filtering here would bake one caller's rule into every caller's
-# data.
+# Reads every row of one segment's lidar_box table into a dict,
+# applying no class or lidar-point-count filter.
 def read_labelled_boxes(parquet_root, segment_name):
     box_table = pq.read_table(
         f"{parquet_root}/lidar_box/{segment_name}.parquet"

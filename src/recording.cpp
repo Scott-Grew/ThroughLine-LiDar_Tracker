@@ -11,18 +11,12 @@
 #include <foxglove/mcap.hpp>
 #include <foxglove/messages.hpp>
 
-// This file is the only place the project draws anything.
-// save_replay_recording writes the lidar points, the ego box, and
-// every confirmed track's box, history trail, predicted path and
-// uncertainty ellipse into an MCAP file, using the Foxglove SDK's
-// well-known schemas, for later playback in Lichtblick. Every
-// position written out is first shifted by recording_origin's
-// translation, because a raw Waymo world coordinate can be tens of
-// thousands of metres from zero and would burn through a float's
-// precision long before it reached the file.
+// Writes a replay's lidar points, boxes, trails, predictions and
+// uncertainty ellipses into an MCAP file for Lichtblick playback.
 
 namespace {
 
+// Point-cloud height ramp, ellipse and line/label drawing constants.
 constexpr double kPointHeightLow = -2.0;
 constexpr double kPointHeightHigh = 4.0;
 constexpr int kEllipseSegments = 32;
@@ -31,10 +25,8 @@ constexpr double kLineThickness = 0.08;
 constexpr double kLabelFontSize = 0.6;
 constexpr double kEgoLength = 5.2, kEgoWidth = 2.4, kEgoHeight = 1.8;
 
-// The one colour a class is ever drawn in, everywhere a track of that
-// class appears: its box, its history trail, its predicted path, its
-// uncertainty ellipse and its label all share this so an object reads
-// as the same object across every primitive it is drawn with.
+// The one colour a class is drawn in across every primitive - box,
+// trail, prediction, ellipse and label - so it reads as one object.
 foxglove::messages::Color class_color(ObjectClass object_class) {
   switch (object_class) {
     case ObjectClass::Vehicle:
@@ -47,22 +39,14 @@ foxglove::messages::Color class_color(ObjectClass object_class) {
   return foxglove::messages::Color{1.0, 1.0, 1.0, 1.0};
 }
 
-// The translation of frame 0's vehicle pose, in Waymo's world frame.
-// Every position this file ever writes out has this subtracted from
-// it first, because a segment's world coordinates can sit tens of
-// thousands of metres from the origin and a float only has so many
-// bits of precision to spend - without this shift, a lidar point and
-// a track box a few metres apart could round to the same float and
-// jitter in the recording.
+// The world-frame translation of frame 0's pose; every position
+// written out has this subtracted to keep it within float precision.
 Eigen::Vector3d recording_origin(const SegmentLog& segment) {
   return segment.frames.front().vehicle_to_world.block<3, 1>(0, 3);
 }
 
-// Turns a frame's capture time into the seconds-and-nanoseconds pair
-// the Foxglove schemas want on a message, and into the single
-// nanosecond count the MCAP channel wants as a message's log time.
-// Both come from the same field so a message's timestamp and the
-// position it sits at in the file always agree.
+// Converts a capture time in microseconds to the Foxglove
+// seconds/nanoseconds timestamp carried on every logged message.
 foxglove::messages::Timestamp to_timestamp(
     std::int64_t capture_time_micros) {
   return foxglove::messages::Timestamp{
@@ -71,13 +55,14 @@ foxglove::messages::Timestamp to_timestamp(
                                  1'000)};
 }
 
+// Converts a capture time in microseconds to nanoseconds, the unit
+// an MCAP channel logs a message's time at.
 std::uint64_t to_nanoseconds(std::int64_t capture_time_micros) {
   return static_cast<std::uint64_t>(capture_time_micros) * 1'000;
 }
 
-// A pose with no translation and no rotation, used for the point
-// cloud, whose points already carry their own world position in the
-// packed data rather than being offset by the channel's pose.
+// A zero position/identity rotation pose, for the point cloud whose
+// points already carry their own world position in the packed data.
 foxglove::messages::Pose identity_pose() {
   foxglove::messages::Pose pose;
   pose.position = foxglove::messages::Vector3{0.0, 0.0, 0.0};
@@ -86,10 +71,8 @@ foxglove::messages::Pose identity_pose() {
   return pose;
 }
 
-// The pose every box in the scene is drawn with: a position and a
-// rotation about the z axis built from a yaw angle, which is all the
-// tracker ever estimates - nothing in this project models roll or
-// pitch.
+// A pose built from a translation and a yaw about z; boxes never
+// need roll or pitch, which the tracker doesn't estimate.
 foxglove::messages::Pose pose_from_translation_yaw(
     const Eigen::Vector3d& translation, double yaw) {
   foxglove::messages::Pose pose;
@@ -100,11 +83,8 @@ foxglove::messages::Pose pose_from_translation_yaw(
   return pose;
 }
 
-// Appends the raw bytes of one value onto a point cloud's packed data
-// buffer. This is the only way the PointCloud schema carries
-// per-point data - every point's x, y, z and colour are laid down
-// back to back at the stride write_frame declares, and this is the
-// one place that byte layout is built.
+// Appends one value's raw bytes onto a point cloud's packed data
+// buffer; this is the only way per-point fields get laid down.
 template <typename Value>
 void append_bytes(std::vector<std::byte>& buffer,
                   const Value& value) {
@@ -114,14 +94,8 @@ void append_bytes(std::vector<std::byte>& buffer,
                 value_bytes + sizeof(Value));
 }
 
-// Turns a height above the ground into the packed colour Lichtblick's
-// point cloud renderer expects in an "rgba" field: a little-endian
-// uint32 read back as 0xaarrggbb, which means blue occupies the
-// lowest byte and alpha the highest. The height is clamped to
-// [kPointHeightLow, kPointHeightHigh] first so a stray high or low
-// point cannot pull the ramp's range around for every other point in
-// the same cloud, and the ramp itself runs blue to green to yellow as
-// height increases.
+// Maps a height to Lichtblick's packed "rgba" uint32 (0xaarrggbb),
+// ramping blue to green to yellow after clamping to the drawn range.
 std::uint32_t height_ramp_color(float height) {
   const float clamped_height =
       std::clamp(height, static_cast<float>(kPointHeightLow),
@@ -154,14 +128,8 @@ std::uint32_t height_ramp_color(float height) {
          blue_channel;
 }
 
-// Builds the closed ring of points that draws as an uncertainty
-// ellipse: kEllipseSigma standard deviations along each eigenvector
-// of the given 2x2 covariance, centred on the given position, at the
-// given height. This is the shape the recording draws around a
-// track's final predicted position, so a wide ellipse there means the
-// filter has stopped trusting its own guess. The ring is logged as a
-// closed LINE_LOOP, so the points stop one short of the starting
-// angle rather than repeating it.
+// Builds a ring of points kEllipseSigma std devs along each
+// covariance eigenvector, for a LINE_LOOP uncertainty ellipse.
 std::vector<foxglove::messages::Point3> ellipse_points(
     const Eigen::Vector2d& center, const Eigen::Matrix2d& covariance,
     double height, const Eigen::Vector3d& origin) {
@@ -172,6 +140,7 @@ std::vector<foxglove::messages::Point3> ellipse_points(
 
   std::vector<foxglove::messages::Point3> points;
   points.reserve(kEllipseSegments);
+  // LINE_LOOP closes the ring itself; no repeated last point.
   for (int segment_index = 0; segment_index < kEllipseSegments;
        ++segment_index) {
     const double angle = 2.0 * M_PI *
@@ -194,19 +163,8 @@ std::vector<foxglove::messages::Point3> ellipse_points(
   return points;
 }
 
-// Writes one frame's whole scene to the three channels: the transform
-// that places the ego frame inside the world frame, the lidar points
-// coloured by height, the ego box, and every confirmed track's box,
-// history, prediction and uncertainty ellipse. Without this
-// transform, "world" is a frame name every other message refers to
-// but nothing ever establishes, so Lichtblick's 3D panel has no
-// display frame to offer and renders nothing. Any track that was
-// written on the previous call but is not in this frame's track list
-// is added to this frame's deletions so its box and every one of its
-// primitives disappear from the recording rather than freezing in
-// place. This is the one function both save_replay_recording and,
-// were it ever run live, a live sink would call, so a recording is
-// always built the same way regardless of who asked for it.
+// Logs one frame's transform, lidar, ego box and each track's box,
+// trail, prediction and ellipse; deletes tracks absent from this one.
 void write_frame(
     foxglove::messages::FrameTransformChannel& transform_channel,
     foxglove::messages::PointCloudChannel& points_channel,
@@ -247,6 +205,7 @@ void write_frame(
   point_cloud.frame_id = "world";
   point_cloud.pose = identity_pose();
   point_cloud.point_stride = 16;
+  // Offsets must match the order append_bytes packs bytes below.
   point_cloud.fields = {
       foxglove::messages::PackedElementField{
           "x", 0,
@@ -414,12 +373,8 @@ void write_frame(
 
 }  // namespace
 
-// Writes a finished replay's stored tracks out through write_frame
-// into a saved .mcap file, recomputing each frame's predictions from
-// the same predictor the live run used. Nothing here runs live, so
-// the file is written as fast as the predictor and the Foxglove SDK
-// can manage, for playback in Lichtblick with no tracker running at
-// all.
+// Writes a finished replay by recomputing each frame's predictions
+// and calling write_frame; nothing here runs live.
 void save_replay_recording(
     const std::string& path, const SegmentLog& segment,
     const std::vector<std::vector<Track>>& confirmed_tracks_per_frame,

@@ -5,29 +5,13 @@
 #include <cmath>
 #include <deque>
 
-// This file walks a staged segment one frame at a time: it turns the
-// frame's labelled boxes into detections, runs them through the
-// perturbation stage, queues them with the time they would actually
-// arrive, steps the tracker with everything that has arrived by this
-// frame's time, and records the confirmed tracks for that frame.
-// Nothing the tracker sees depends on the wall clock, so the same
-// segment and seed always produce the same tracks; the clock is read
-// only to time each step.
-//
-// Detections are always the ground-truth labels: boxes the sensor
-// returned no points for are left out. Waymo labels objects it knows
-// are there even when nothing came back from them, and its own
-// scoring ignores those, so handing them to the tracker would give it
-// knowledge no detector could have and then count every one of them
-// against it as an object it invented.
+// Turns a staged segment's labelled boxes into perturbed
+// detections and steps a tracker over them, frame by frame.
 
 namespace {
 
-// One frame's detections, waiting between being perturbed and being
-// handed to the tracker. It carries its own capture time and its own
-// vehicle pose because by the time it arrives the replay may be on a
-// later frame - a late detection must still be placed using the pose
-// of the frame it was actually captured in.
+// One frame's detections, waiting to be handed to the tracker;
+// carries its own capture time and pose for a late arrival.
 struct PendingMeasurement {
   std::int64_t available_time_micros;
   std::int64_t capture_time_micros;
@@ -37,9 +21,8 @@ struct PendingMeasurement {
 
 }  // namespace
 
-// The value at a given fraction through the sorted samples, which is
-// how the step timings become the p50 and p99 the summary line
-// reports.
+// The value at the given fraction through the sorted samples,
+// e.g. 0.5 and 0.99 for the p50 and p99 the summary line reports.
 double TimingStats::percentile(double fraction) const {
   if (step_milliseconds.empty()) return 0.0;
   std::vector<double> sorted_milliseconds = step_milliseconds;
@@ -50,6 +33,8 @@ double TimingStats::percentile(double fraction) const {
   return sorted_milliseconds[index];
 }
 
+// Builds the tracker and perturbation for one run over segment,
+// which must outlive this Replay.
 Replay::Replay(const SegmentLog& segment, ReplaySettings settings)
     : segment_(segment),
       tracker_(settings.tracker),
@@ -57,12 +42,13 @@ Replay::Replay(const SegmentLog& segment, ReplaySettings settings)
   confirmed_tracks_per_frame_.reserve(segment.frames.size());
 }
 
-// For each frame: drop zero-point boxes, perturb, queue with arrival
-// time, step the tracker on everything that has arrived, record what
-// it confirmed, and time the step against the frame period.
+// Perturbs each frame's boxes, queues them until they would
+// arrive, and steps the tracker on whatever has arrived by then.
 void Replay::run() {
   std::deque<PendingMeasurement> pending;
 
+  // Falls back to a 10 Hz period when there is only one frame to
+  // measure a gap from.
   const std::int64_t frame_period_micros =
       segment_.frames.size() >= 2
           ? segment_.frames[1].capture_time_micros -
@@ -75,6 +61,8 @@ void Replay::run() {
     std::vector<Detection> source_detections;
     source_detections.reserve(frame.ground_truth.size());
     for (const GroundTruthBox& truth : frame.ground_truth) {
+      // Boxes with no lidar returns are excluded so the tracker
+      // never sees knowledge no real detector could have.
       if (truth.lidar_points_in_box <= 0) continue;
       source_detections.push_back(
           Detection{truth.object_class, truth.box, 1.0f});
@@ -110,10 +98,13 @@ void Replay::run() {
   }
 }
 
+// The step timings recorded by the most recent run() call.
 const TimingStats& Replay::timing() const {
   return timing_;
 }
 
+// The confirmed tracks from the most recent run() call, one
+// entry per frame in segment order.
 const std::vector<std::vector<Track>>&
 Replay::confirmed_tracks_per_frame() const {
   return confirmed_tracks_per_frame_;

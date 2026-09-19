@@ -1,23 +1,15 @@
 #include "perturb.hpp"
 
-// This file stands in for everything that makes a real sensor worse
-// than a perfect one. It sits between the ground truth and the
-// tracker: replay.cpp reads a frame's detections, passes them through
-// here, and only the result is ever handed to the tracker. Three
-// faults are modelled - a detection can be dropped entirely, its box
-// can be reported in the wrong place, and the whole detection can
-// arrive late. Turning any of these up is how a run answers "how well
-// does this tracker hold up on a worse sensor" without touching the
-// tracker itself.
+// Fault injector standing between ground truth and the tracker;
+// replay.cpp passes every frame's detections through apply() first.
 
+// Seeds the fault generator so a run is reproducible from the seed.
 Perturbation::Perturbation(PerturbationSettings settings,
                            std::uint64_t seed)
     : settings_(settings), generator_(seed) {}
 
-// Runs every detection in a frame through the drop and displacement
-// faults, in a fixed order so that two runs with the same seed make
-// the same decisions for the same detection every time. Arrival time
-// is available_time's job below.
+// Applies dropout and position noise to each detection in a fixed
+// order, so the same seed reproduces the same faults every run.
 std::vector<Detection> Perturbation::apply(
     const std::vector<Detection>& detections) {
   std::uniform_real_distribution<double> dropout_draw(0.0, 1.0);
@@ -38,11 +30,8 @@ std::vector<Detection> Perturbation::apply(
   return kept;
 }
 
-// When a detection captured at this time actually reaches the
-// tracker, once the sensor's own processing and transmission delay is
-// accounted for. The tracker never sees a detection before this time,
-// which is what lets a frame's late detections turn up attached to a
-// later frame.
+// The time a captured detection actually reaches the tracker, after
+// the modelled latency.
 std::int64_t Perturbation::available_time(
     std::int64_t capture_time_micros) const {
   return capture_time_micros + settings_.latency_micros;

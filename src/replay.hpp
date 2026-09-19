@@ -5,18 +5,27 @@
 #include "perturb.hpp"
 #include "tracker.hpp"
 
+// Steps a tracker through a staged segment's frames and records
+// what it confirms; used by the CLI and by evaluation runs.
+
+// Seed and settings a Replay run uses for perturbation and for
+// the tracker underneath it.
 struct ReplaySettings {
   std::uint64_t seed = 1;
   PerturbationSettings perturbation;
   TrackerSettings tracker;
 };
 
+// Per-step wall-clock timings in milliseconds, plus a count of
+// steps slower than the segment's frame period.
 struct TimingStats {
   std::vector<double> step_milliseconds;
   std::uint64_t overruns = 0;
   double percentile(double fraction) const;
 };
 
+// Steps one tracker instance through one segment; not shared
+// across segments or threads.
 class Replay {
  public:
   Replay(const SegmentLog& segment, ReplaySettings settings);

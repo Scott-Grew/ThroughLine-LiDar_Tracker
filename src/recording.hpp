@@ -5,11 +5,8 @@
 #include "predict.hpp"
 #include "types.hpp"
 
-// This file is the only place the project draws anything.
-// save_replay_recording writes a finished replay's tracks,
-// predictions and lidar points into an .mcap file for playback in
-// Lichtblick. Nothing outside recording.cpp knows what a Foxglove
-// message looks like.
+// Writes a finished replay to an .mcap file for playback in
+// Lichtblick; the only place in the project that draws anything.
 
 void save_replay_recording(
     const std::string& path, const SegmentLog& segment,

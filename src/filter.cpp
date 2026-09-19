@@ -3,42 +3,26 @@
 #include <cmath>
 #include <stdexcept>
 
-// This file is the estimator. Every tracked object owns five numbers
-// - where it is (x and y), which way it faces, how fast it is going,
-// and how quickly it is turning - plus a table of how wrong each of
-// those might be. Nothing outside this file changes those numbers.
-// The tracker calls predict when time passes and update when a new
-// box arrives; the assignment code calls mahalanobis_squared to ask
-// whether a box could belong to this object; the viewer draws the
-// uncertainty this file produces. Speed and turn rate are never
-// measured by anything - they exist only because this file infers
-// them from how the box moves between frames.
+// Extended Kalman filter for a track's position, heading, speed,
+// and turn rate; tracker.cpp predicts every frame, updates on match.
 
 namespace {
 
-// How unsure we are about speed and turning the very first time we
-// see an object. Both are guesses of zero, so the uncertainty is set
-// wide enough to cover a parked car through a highway car, which lets
-// the first few frames correct them freely instead of fighting a
-// confident zero.
+// Initial uncertainty for speed and yaw rate, both unmeasured and
+// guessed as zero; wide enough to let early frames correct freely.
 constexpr double kInitialSpeedSigma = 10.0;
 constexpr double kInitialYawRateSigma = 1.0;
 
-// Below this turn rate an object counts as going straight. The
-// turning formula divides by the turn rate, so without this cutoff
-// every straight-driving car would divide by zero and poison its
-// track with invalid numbers. Straight driving is the common case, so
-// this branch runs constantly.
+// Below this yaw rate the motion model treats the path as straight,
+// avoiding a divide-by-zero in the curved-path equations below.
 constexpr double kStraightLineYawRate = 1e-4;
 
-// How much of a newly measured box size to believe each frame. A
-// car's length does not change, so size is smoothed separately rather
-// than being estimated like position and speed.
+// Fraction of a newly measured box size adopted per frame; size is
+// smoothed, not estimated like position and speed.
 constexpr double kSizeSmoothing = 0.3;
 
-// Says which of the five numbers the sensor actually sees: position
-// and facing, never speed or turn rate. Everything that compares a
-// prediction to a measurement goes through this.
+// Maps the five-number state to the three the sensor measures:
+// position and heading, never speed or turn rate.
 Eigen::Matrix<double, 3, 5> measurement_jacobian() {
   Eigen::Matrix<double, 3, 5> matrix =
       Eigen::Matrix<double, 3, 5>::Zero();
@@ -48,9 +32,8 @@ Eigen::Matrix<double, 3, 5> measurement_jacobian() {
   return matrix;
 }
 
-// How much the box itself jitters frame to frame. These values are
-// measured from the data by the staging script, not invented here.
-// They decide how much the filter trusts each new box.
+// Measurement noise covariance from the sigmas the staging script
+// measured for this segment.
 Eigen::Matrix3d measurement_noise(const FilterNoise& noise) {
   Eigen::Matrix3d matrix = Eigen::Matrix3d::Zero();
   matrix(0, 0) = noise.sigma_measurement_position *
@@ -64,25 +47,14 @@ Eigen::Matrix3d measurement_noise(const FilterNoise& noise) {
 
 }  // namespace
 
-// Folds an angle back into the range minus half a turn to plus half a
-// turn. Facing angles wrap around, so two cars pointing almost the
-// same way can differ by nearly a full turn on paper. Skip this
-// anywhere and the filter sees an enormous error where there is none,
-// and throws away a good track. It is called after every place an
-// angle is added or subtracted.
+// Wraps an angle into (-pi, pi]. Every heading difference in this
+// file must be wrapped, or a near-identical heading reads as huge.
 double wrap_angle(double radians) {
   return std::remainder(radians, 2.0 * M_PI);
 }
 
-// Builds the starting five numbers for an object the tracker has just
-// seen for the first time. Refuses a sensor with no jitter at all,
-// because that would claim the first box is perfect and leave the
-// object with zero uncertainty, which every later calculation would
-// divide by. Position and facing are copied straight from the box
-// because that is exactly what was measured. Speed and turn rate
-// start at zero, but marked as very unsure, so the next few frames
-// can move them to the truth. The size of the box is carried along
-// untouched.
+// Builds a track's starting state from its first box, with speed and
+// yaw rate at zero. Throws if either measurement sigma is <= 0.
 TrackState initial_state(const Box& box, const FilterNoise& noise) {
   if (noise.sigma_measurement_position <= 0.0 ||
       noise.sigma_measurement_yaw <= 0.0)
@@ -106,17 +78,8 @@ TrackState initial_state(const Box& box, const FilterNoise& noise) {
   return state;
 }
 
-// Moves an object forward in time without looking at any new data,
-// and widens its uncertainty because a guess is not a sighting. This
-// is what lets a track survive a frame where the object was missed,
-// and it is what draws the predicted path on screen. The jacobian
-// carries the old uncertainty through the motion; the process noise
-// added at the end admits that real cars speed up and brake while
-// this motion model assumes they do not. That unmodelled acceleration
-// acts along the way the object is already facing, so it pushes
-// position and speed together rather than as two separate guesses -
-// the process noise below is built from that single push, not from
-// independent doubts about each number.
+// Advances the state by dt_seconds without a measurement, widening
+// covariance by process noise coupled through the current heading.
 void predict(TrackState& state, double dt_seconds,
              const FilterNoise& noise) {
   const double yaw = state.mean(2);
@@ -173,9 +136,8 @@ void predict(TrackState& state, double dt_seconds,
       process_noise;
 }
 
-// The plain disagreement between where a box is and where this object
-// was predicted to be. The facing part is wrapped, because the
-// shortest way round is the only meaningful answer.
+// Difference between a measured box and the predicted state, with
+// the heading difference wrapped to its shortest direction.
 Eigen::Vector3d innovation(const TrackState& state,
                            const Box& measurement) {
   Eigen::Vector3d difference;
@@ -185,9 +147,8 @@ Eigen::Vector3d innovation(const TrackState& state,
   return difference;
 }
 
-// How much disagreement would be normal, given both how unsure the
-// prediction is and how much the sensor jitters. Without this there
-// is no way to tell a small error from a large one.
+// Expected spread of the innovation, combining the state's own
+// uncertainty with how much the sensor itself jitters.
 Eigen::Matrix3d innovation_covariance(const TrackState& state,
                                       const FilterNoise& noise) {
   const Eigen::Matrix<double, 3, 5> observation =
@@ -196,12 +157,8 @@ Eigen::Matrix3d innovation_covariance(const TrackState& state,
          measurement_noise(noise);
 }
 
-// Turns a disagreement in metres into a disagreement in units of how
-// surprised we should be. Two metres is enormous for an object we
-// have watched for a second and nothing at all for one we just found.
-// The assignment code uses this number to decide which box belongs to
-// which object, and to refuse a pairing that is too far-fetched, so
-// this is the gatekeeper against identity swaps.
+// Innovation expressed in units of standard deviations rather than
+// metres; the tracker gates and rejects matches on this distance.
 double mahalanobis_squared(const TrackState& state,
                            const Box& measurement,
                            const FilterNoise& noise) {
@@ -211,17 +168,8 @@ double mahalanobis_squared(const TrackState& state,
   return difference.transpose() * covariance.ldlt().solve(difference);
 }
 
-// Folds a new box into the object, pulling the five numbers toward
-// what was just seen. How far they move is decided by which is
-// currently more trustworthy, the prediction or the sensor - nothing
-// is hand-tuned here. Because position and speed have become linked
-// by watching the object move, correcting the position also corrects
-// the speed, which is how a quantity the sensor never measures gets
-// learned at all. The long covariance line is the numerically safe
-// form of the update; the short textbook version drifts until the
-// uncertainty stops being valid and the gatekeeper above starts
-// making nonsense decisions. Box size is not estimated, only
-// smoothed.
+// Folds a matched box into the state via the Kalman gain, using the
+// numerically stable Joseph form for the covariance update.
 void update(TrackState& state, const Box& measurement,
             const FilterNoise& noise) {
   const Eigen::Matrix<double, 3, 5> observation =

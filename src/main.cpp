@@ -10,10 +10,8 @@
 #include "recording.hpp"
 #include "replay.hpp"
 
-// This file is the front door: it turns command-line flags into the
-// settings every other file runs on, replays one segment, prints how
-// fast the tracker ran, and writes an export or a recording if asked.
-// Scores come from Waymo's evaluator on the export, never from here.
+// Command-line entry point: turns flags into settings and replays a
+// segment. Waymo's evaluator scores the export; nothing here does.
 
 namespace {
 
@@ -22,6 +20,7 @@ namespace {
 constexpr double kPredictionHorizonSeconds = 3.0;
 constexpr double kPredictionStepSeconds = 0.1;
 
+// Prints step timing percentiles and frame count to stdout.
 void print_summary(const TimingStats& timing) {
   std::cout << "step_p50_ms " << timing.percentile(0.5)
             << " step_p99_ms " << timing.percentile(0.99)

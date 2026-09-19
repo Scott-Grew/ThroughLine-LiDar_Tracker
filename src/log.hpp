@@ -4,6 +4,11 @@
 #include <vector>
 #include "types.hpp"
 
+// Declares the in-memory shape of a staged segment and the
+// reader/writer for its binary file, defined in log.cpp.
+
+// One staged segment: its frames plus the box-jitter sigmas the
+// stager measured for it.
 struct SegmentLog {
   std::string segment_name;
   std::vector<Frame> frames;

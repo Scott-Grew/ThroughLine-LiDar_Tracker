@@ -5,21 +5,11 @@
 #include <stdexcept>
 #include "filter.hpp"
 
-// This file turns whatever the replay loop confirmed into a plain CSV
-// that anything outside this codebase can read. It is the one place a
-// track leaves the world frame the tracker works in and goes back
-// into the vehicle frame the log itself was staged in, because that
-// is the frame Waymo's own tooling expects a submission in. Nothing
-// in the tracker, the metrics or the viewer reads this file back - it
-// is written once, at the end of a run, for a Python script in the
-// container to turn into Waymo's Objects proto later.
+// Writes confirmed tracks to a CSV in the vehicle frame, for a
+// container script to turn into Waymo's Objects proto submission.
 
-// Writes one row per confirmed track per frame, in the vehicle frame
-// of that frame rather than the world frame the tracker actually
-// reasons in, since a submission is only ever meaningful relative to
-// the sensor that captured it. The two lists are walked in lockstep
-// because confirmed track list at index i is exactly what the tracker
-// confirmed for segment.frames[i].
+// Writes one row per confirmed track per frame, converting each
+// track from the world frame back into that frame's vehicle frame.
 void export_tracks(const std::string& path, const SegmentLog& segment,
                    const std::vector<std::vector<Track>>&
                        confirmed_tracks_per_frame) {
@@ -44,6 +34,7 @@ void export_tracks(const std::string& path, const SegmentLog& segment,
                                            track.state.center_z, 1.0);
       const Eigen::Vector4d vehicle_position =
           vehicle_from_world * world_position;
+      // Rotates the track's world yaw into this frame's heading.
       const double vehicle_yaw =
           wrap_angle(track.state.mean(2) - heading_offset);
 

@@ -6,15 +6,17 @@
 #include "filter.hpp"
 #include "types.hpp"
 
+// Declares the tracker and the knobs that govern its life cycle.
+
+// Tuning knobs for track confirmation, deletion, the assignment
+// gate, and the filter's own process and measurement noise.
 struct TrackerSettings {
   // Matched frames before a track is reported. Chosen.
   std::uint32_t hits_to_confirm = 3;
   // Unmatched frames before a confirmed track is dropped. Chosen.
   std::uint32_t misses_to_delete = 5;
-  // Max squared Mahalanobis distance (x, y, yaw gap in units of
-  // filter uncertainty) for a match. Chi-squared, 3 degrees of
-  // freedom, 0.99 quantile: a true match is refused 1 percent of the
-  // time.
+  // Max squared Mahalanobis distance for a match: chi-squared, 3
+  // degrees of freedom, 0.99 quantile. Refuses 1% of true matches.
   double gate_chi_squared = 11.34;
   // Track slots reserved up front so the list never reallocates
   // mid-run. Chosen.
@@ -23,6 +25,8 @@ struct TrackerSettings {
   FilterNoise noise;
 };
 
+// Owns the list of tracks and decides, frame by frame, which
+// detection belongs to which object.
 class Tracker {
  public:
   explicit Tracker(TrackerSettings settings);

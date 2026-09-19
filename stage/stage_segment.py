@@ -1,11 +1,6 @@
 """
-This script turns Waymo's own v2 parquet files for one segment into the binary log the tracker
-reads. It joins the lidar range image, its calibration, the per-object ground truth boxes and the
-vehicle pose by frame timestamp, converts the range image into vehicle-frame points, and writes the
-result in the exact byte layout README.md describes. Nothing downstream of the log format depends
-on this file - only this script and the C++ reader in log.cpp agree on what the bytes mean, and the
-sanity check below exists to catch a wrong azimuth convention before it silently corrupts every
-point in the segment.
+Turns one Waymo v2 parquet segment into the binary log the C++
+tracker reads; only this file and log.cpp agree on the byte layout.
 """
 
 import argparse
@@ -16,16 +11,22 @@ import pyarrow.parquet as pq
 
 from waymo_boxes import read_labelled_boxes, stable_object_id
 
+# Byte-string tag written at the start of every staged log file.
 MAGIC = b"TRKLOG03"
+
+# Waymo's own object type codes, used for ground truth filtering.
 VEHICLE_TYPE = 1
 PEDESTRIAN_TYPE = 2
 CYCLIST_TYPE = 4
 
 
+# Wraps an angle into (-pi, pi] using complex exponentials.
 def wrap_angle(radians):
     return float(np.angle(np.exp(1j * radians)))
 
 
+# Joins one segment's lidar, calibration, pose and ground-truth
+# parquet tables by frame timestamp, for a single laser only.
 def read_components(parquet_root, segment, laser):
     lidar_table = pq.read_table(
         f"{parquet_root}/lidar/{segment}.parquet"
@@ -152,6 +153,8 @@ def read_components(parquet_root, segment, laser):
     return frames
 
 
+# Converts one laser's flattened range image into vehicle-frame
+# xyz points, using the calibration's inclinations and extrinsic.
 def range_image_to_points(
     range_image_values, range_image_shape, calibration
 ):
@@ -166,6 +169,8 @@ def range_image_to_points(
         inclination_values is not None
         and len(inclination_values) == height
     ):
+        # calibration's inclination list runs opposite the image's
+        # row order, hence the reversal
         inclinations = inclination_values[::-1]
     else:
         inclinations = np.linspace(
@@ -177,6 +182,8 @@ def range_image_to_points(
     extrinsic = calibration["extrinsic"]
     azimuth_correction = np.arctan2(extrinsic[1, 0], extrinsic[0, 0])
     column_indices = np.arange(width)
+    # azimuth convention here is easy to get backwards; main()'s
+    # point-ratio check exists to catch it
     azimuths = (
         np.pi
         - (column_indices + 0.5) * 2.0 * np.pi / width
@@ -210,6 +217,8 @@ def range_image_to_points(
     return points
 
 
+# Counts vehicle-frame points that fall inside one oriented box's
+# footprint and height range.
 def count_points_in_box(points, box):
     cosine = np.cos(-box["heading"])
     sine = np.sin(-box["heading"])
@@ -226,6 +235,8 @@ def count_points_in_box(points, box):
     return int(np.count_nonzero(inside_footprint & inside_height))
 
 
+# Estimates position and heading measurement noise from how far
+# each object's motion deviates from constant velocity.
 def measure_box_jitter(boxes_by_frame):
     positions_by_object = {}
     for frame_index, boxes in enumerate(boxes_by_frame):
@@ -262,6 +273,7 @@ def measure_box_jitter(boxes_by_frame):
                 or next_frame - current_frame != 1
             ):
                 continue
+            # constant-velocity prediction: 2 * current - previous
             position_residuals.append(
                 next_x - (2.0 * current_x - previous_x)
             )
@@ -290,6 +302,8 @@ def measure_box_jitter(boxes_by_frame):
     return position_sigma, heading_sigma
 
 
+# Serializes the header and every frame into the exact byte layout
+# log.cpp's reader expects; the two must change together.
 def write_log(
     path, segment_name, frames, position_sigma, heading_sigma
 ):
@@ -337,6 +351,8 @@ def write_log(
                 )
 
 
+# CLI entry point: stages one segment, runs the point-ratio sanity
+# check, measures jitter sigmas, and writes the log file.
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required=True)

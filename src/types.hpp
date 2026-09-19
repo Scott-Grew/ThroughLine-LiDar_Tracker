@@ -3,34 +3,32 @@
 #include <vector>
 #include <Eigen/Dense>
 
-// This file has no logic in it, only the shapes every other file
-// agrees to pass around: a detection or ground truth box, a frame of
-// the log, the five numbers the filter tracks for one object, and a
-// track itself with its life-cycle bookkeeping. Every part of the
-// pipeline - the stager, the filter, the assignment code, the
-// tracker, the metrics and the viewer - includes this file and none
-// of them define their own version of these shapes, so a field added
-// or removed here is a change every one of those files has to answer
-// for.
+// Shared data shapes used across the pipeline: detections, ground
+// truth, frames, filter state and tracks. Every module includes it.
 
+// The object classes a detection or track can belong to.
 enum class ObjectClass : std::uint8_t {
   Vehicle = 1,
   Pedestrian = 2,
   Cyclist = 4
 };
 
+// A 3D oriented box: center, extents and yaw. The frame it is
+// expressed in depends on which struct holds it.
 struct Box {
   double center_x, center_y, center_z;
   double length, width, height;
   double yaw;
 };
 
+// One perceived object in a frame, with the detector's confidence.
 struct Detection {
   ObjectClass object_class;
   Box box;
   float score;
 };
 
+// One labeled ground-truth object and its lidar point support.
 struct GroundTruthBox {
   std::uint64_t object_id;
   ObjectClass object_class;
@@ -38,10 +36,13 @@ struct GroundTruthBox {
   std::int32_t lidar_points_in_box;
 };
 
+// One lidar point in the sensor's local (vehicle) frame.
 struct Point {
   float x, y, z;
 };
 
+// One frame of the log: capture time, the vehicle's pose in world,
+// its lidar points and the ground-truth boxes visible in it.
 struct Frame {
   std::int64_t capture_time_micros;
   Eigen::Matrix4d vehicle_to_world;
@@ -49,18 +50,23 @@ struct Frame {
   std::vector<GroundTruthBox> ground_truth;
 };
 
+// A track's filter mean and covariance (x, y, yaw, then the
+// constant-turn-rate model's remaining state) plus box dimensions.
 struct TrackState {
   Eigen::Matrix<double, 5, 1> mean;
   Eigen::Matrix<double, 5, 5> covariance;
   double center_z, length, width, height;
 };
 
+// A track's life-cycle stage: tentative, confirmed or coasting.
 enum class TrackStatus : std::uint8_t {
   Tentative,
   Confirmed,
   Coasting
 };
 
+// One tracked object: identity, class, life-cycle state, current
+// filter state and its recent position history for drawing.
 struct Track {
   std::uint64_t track_id;
   ObjectClass object_class;

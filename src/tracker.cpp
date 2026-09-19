@@ -2,33 +2,23 @@
 
 #include <cmath>
 
-// This file is the whole point of the project: it decides, frame by
-// frame, which boxes belong to which object over time. It owns the
-// list of tracks and nothing else touches that list directly. Each
-// call to step hands it one frame's detections; it moves every
-// existing track forward to that frame's time, works out which
-// detection goes with which track separately for each object class,
-// folds the matches into the filter in filter.cpp, starts new tracks
-// for whatever was left over, and drops whatever has gone unseen for
-// too long. Everything the viewer draws and everything the metrics in
-// metrics.cpp score comes from what this file decided.
+// Frame-by-frame track life cycle: predict, match, update, create
+// and delete tracks. The viewer and the metrics read what this owns.
 
 namespace {
 
+// Trajectory points kept per track, oldest dropped first.
 constexpr std::size_t kHistoryLength = 30;
 
 }
 
+// Reserves track storage up front so tracking never reallocates.
 Tracker::Tracker(TrackerSettings settings) : settings_(settings) {
   tracks_.reserve(settings_.reserved_tracks);
 }
 
-// Turns a box measured in the sensor's own frame into the same box in
-// the fixed world frame, using the frame's recorded vehicle pose.
-// Every comparison the tracker makes between a track and a detection
-// happens in world coordinates, because the vehicle itself is moving
-// and a track cannot be compared against a box that is still sitting
-// in a different frame's sensor frame.
+// Converts a box from the sensor's local frame into the fixed world
+// frame using the frame's vehicle pose; matching happens in world.
 Box Tracker::to_world(const Box& box,
                       const Eigen::Matrix4d& vehicle_to_world) {
   const Eigen::Vector4d local_position(box.center_x, box.center_y,
@@ -45,13 +35,8 @@ Box Tracker::to_world(const Box& box,
   return world_box;
 }
 
-// Carries every track's filter state forward to the time of the frame
-// that is about to be processed, so that the assignment step below
-// compares each detection against where the object is predicted to be
-// right now, not where it was last actually seen. Each track
-// remembers, in state_time_micros, the time its own state already
-// accounts for, so a track that was already updated earlier in this
-// same frame is not predicted twice.
+// Advances every track's filter to this frame's capture time. Each
+// track's state_time_micros stops it being predicted twice per frame.
 void Tracker::predict_all_to(std::int64_t capture_time_micros) {
   for (Track& track : tracks_) {
     if (track.state_time_micros >= capture_time_micros) continue;
@@ -64,15 +49,8 @@ void Tracker::predict_all_to(std::int64_t capture_time_micros) {
   }
 }
 
-// Runs one frame through the whole life cycle: predict every track
-// forward, match tracks against detections one object class at a time
-// so a car is never compared against a pedestrian, fold each match
-// into its track's filter, count misses against tracks nothing
-// matched, start a new tentative track for every detection nothing
-// claimed, and finally remove whatever has been unseen for too long.
-// Matching happens per class because mixing classes into one cost
-// matrix would let a cheap but wrong cross-class match crowd out the
-// right one.
+// Runs one frame's full life cycle: predict, assign detections to
+// tracks per object class, update matches, create and delete tracks.
 void Tracker::step(std::int64_t capture_time_micros,
                    const std::vector<Detection>& detections,
                    const Eigen::Matrix4d& vehicle_to_world) {
@@ -162,6 +140,8 @@ void Tracker::step(std::int64_t capture_time_micros,
 
   for (Track& track : new_tracks) tracks_.push_back(std::move(track));
 
+  // marked_for_deletion mirrors tracks_ by index; erase_cursor keeps
+  // the two in step as erase_if visits tracks_ in order.
   marked_for_deletion.resize(tracks_.size(), false);
   std::size_t erase_cursor = 0;
   std::erase_if(tracks_, [&](const Track&) {
@@ -169,20 +149,14 @@ void Tracker::step(std::int64_t capture_time_micros,
   });
 }
 
-// Hands back every track exactly as the last step call left it,
-// tentative ones included. The determinism and allocation tests read
-// the tracker through this, since they care about the raw life cycle
-// rather than what the viewer or the metrics choose to show.
+// Every track exactly as the last step() call left it, tentative
+// tracks included; used by tests that need the raw life cycle.
 const std::vector<Track>& Tracker::tracks() const {
   return tracks_;
 }
 
-// Hands back the tracks a caller outside the tracker is allowed to
-// see: only the ones confirmed enough to report, carried forward in
-// time to the moment asked for. This is what the viewer draws and
-// what the metrics score, so a track that has not yet earned enough
-// hits, or one that only just started coasting on a single miss,
-// never reaches either of them.
+// Tracks confirmed enough to report, predicted forward to the given
+// time; this is what the viewer draws and the metrics score.
 std::vector<Track> Tracker::confirmed_tracks_at(
     std::int64_t query_time_micros) const {
   std::vector<Track> result;
