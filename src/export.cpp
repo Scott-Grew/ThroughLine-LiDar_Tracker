@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include "filter.hpp"
 
-// Writes confirmed tracks to a CSV in the vehicle frame, for a
-// container script to turn into Waymo's Objects proto submission.
+// Writes confirmed tracks to a CSV in each frame's vehicle frame;
+// the scripts in eval/ read it to score the run.
 
 // Writes one row per confirmed track per frame, converting each
 // track from the world frame back into that frame's vehicle frame.

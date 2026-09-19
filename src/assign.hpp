@@ -5,6 +5,7 @@
 // Matches tracks to detections from a track-by-detection cost
 // grid; called once per object class per frame by the tracker.
 
+// Which solver assign() runs: optimal Hungarian or cheapest-first.
 enum class AssignmentMethod { Hungarian, Greedy };
 
 // The matched track/detection pairs from one assign() call, plus

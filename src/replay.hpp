@@ -6,7 +6,7 @@
 #include "tracker.hpp"
 
 // Steps a tracker through a staged segment's frames and records
-// what it confirms; used by the CLI and by evaluation runs.
+// what it confirms; used by the CLI and the determinism test.
 
 // Seed and settings a Replay run uses for perturbation and for
 // the tracker underneath it.

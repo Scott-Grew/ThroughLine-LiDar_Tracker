@@ -1,7 +1,5 @@
-"""
-Packs the tracker's CSV export and Waymo's lidar_box parquet into
-the two Objects protos compute_tracking_metrics_main reads.
-"""
+# Packs the tracker's CSV export and Waymo's lidar_box parquet into
+# the two Objects protos compute_tracking_metrics_main reads.
 
 import argparse
 import pathlib
@@ -19,6 +17,7 @@ sys.path.insert(
 )
 from waymo_boxes import read_labelled_boxes
 
+# Waymo type codes kept: vehicle, pedestrian and cyclist.
 TRACKED_WAYMO_TYPES = {1, 2, 4}
 
 

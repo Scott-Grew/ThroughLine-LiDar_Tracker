@@ -3,7 +3,7 @@
 #include <cmath>
 
 // Frame-by-frame track life cycle: predict, match, update, create
-// and delete tracks. The viewer and the metrics read what this owns.
+// and delete tracks. Replay reads the confirmed tracks this owns.
 
 namespace {
 
@@ -12,13 +12,14 @@ constexpr std::size_t kHistoryLength = 30;
 
 }
 
-// Reserves track storage up front so tracking never reallocates.
+// Reserves reserved_tracks slots so step() does not reallocate
+// until more tracks than that are alive at once.
 Tracker::Tracker(TrackerSettings settings) : settings_(settings) {
   tracks_.reserve(settings_.reserved_tracks);
 }
 
-// Converts a box from the sensor's local frame into the fixed world
-// frame using the frame's vehicle pose; matching happens in world.
+// Converts a box from the vehicle frame into the fixed world frame
+// using the frame's vehicle pose; matching happens in world.
 Box Tracker::to_world(const Box& box,
                       const Eigen::Matrix4d& vehicle_to_world) {
   const Eigen::Vector4d local_position(box.center_x, box.center_y,
@@ -155,8 +156,8 @@ const std::vector<Track>& Tracker::tracks() const {
   return tracks_;
 }
 
-// Tracks confirmed enough to report, predicted forward to the given
-// time; this is what the viewer draws and the metrics score.
+// Copies of the confirmed and coasting tracks, predicted forward to
+// the given time; this is what gets exported and recorded.
 std::vector<Track> Tracker::confirmed_tracks_at(
     std::int64_t query_time_micros) const {
   std::vector<Track> result;

@@ -20,7 +20,8 @@ namespace {
 constexpr double kPredictionHorizonSeconds = 3.0;
 constexpr double kPredictionStepSeconds = 0.1;
 
-// Prints step timing percentiles and frame count to stdout.
+// Prints step p50 and p99 in milliseconds, the overrun count and
+// the frame count to stdout.
 void print_summary(const TimingStats& timing) {
   std::cout << "step_p50_ms " << timing.percentile(0.5)
             << " step_p99_ms " << timing.percentile(0.99)
@@ -30,8 +31,8 @@ void print_summary(const TimingStats& timing) {
 
 }  // namespace
 
-// Kept separate from main so every failure it can raise arrives
-// somewhere that turns it into a line of text and an exit code.
+// Parses flags, replays the segment, then writes the export and
+// recording if asked. Throws on failure; main reports it.
 int run(int argument_count, char** arguments) {
   CLI::App app{"Waymo multi-object tracker"};
   std::string segment_path;

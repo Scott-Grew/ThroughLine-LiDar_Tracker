@@ -55,8 +55,8 @@ constexpr double kCostScale = 1e6;
 // than any total the scaled costs reach, so a match always wins.
 constexpr long kPairReward = 1000000000000L;
 
-// The optimal answer, from dlib's Hungarian solver over a square
-// embedding of the rectangular gated grid; see the note below.
+// The optimal pairing, from dlib's Hungarian solver run on a
+// zero-padded square copy of the rectangular gated grid.
 std::vector<std::pair<int, int>> hungarian_pairs(
     const Eigen::MatrixXd& cost, double gate) {
   const long row_count = cost.rows();

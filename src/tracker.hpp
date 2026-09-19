@@ -18,15 +18,15 @@ struct TrackerSettings {
   // Max squared Mahalanobis distance for a match: chi-squared, 3
   // degrees of freedom, 0.99 quantile. Refuses 1% of true matches.
   double gate_chi_squared = 11.34;
-  // Track slots reserved up front so the list never reallocates
-  // mid-run. Chosen.
+  // Track slots reserved up front; the list reallocates only if
+  // more tracks than this are alive at once. Chosen.
   std::size_t reserved_tracks = 512;
   AssignmentMethod assignment = AssignmentMethod::Hungarian;
   FilterNoise noise;
 };
 
-// Owns the list of tracks and decides, frame by frame, which
-// detection belongs to which object.
+// Owns the track list, held in the world frame, and decides frame
+// by frame which detection belongs to which track. One thread only.
 class Tracker {
  public:
   explicit Tracker(TrackerSettings settings);

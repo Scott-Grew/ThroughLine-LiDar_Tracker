@@ -6,7 +6,8 @@
 // Shared data shapes used across the pipeline: detections, ground
 // truth, frames, filter state and tracks. Every module includes it.
 
-// The object classes a detection or track can belong to.
+// The object classes a detection or track can belong to; the
+// values are Waymo's own type codes, stored as-is in the log.
 enum class ObjectClass : std::uint8_t {
   Vehicle = 1,
   Pedestrian = 2,
@@ -50,8 +51,8 @@ struct Frame {
   std::vector<GroundTruthBox> ground_truth;
 };
 
-// A track's filter mean and covariance (x, y, yaw, then the
-// constant-turn-rate model's remaining state) plus box dimensions.
+// Filter mean and covariance over x, y, yaw, speed and yaw rate in
+// the world frame (m, rad, m/s, rad/s), plus smoothed box size.
 struct TrackState {
   Eigen::Matrix<double, 5, 1> mean;
   Eigen::Matrix<double, 5, 5> covariance;

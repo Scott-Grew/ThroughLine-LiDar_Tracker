@@ -1,7 +1,5 @@
-"""
-Turns one Waymo v2 parquet segment into the binary log the C++
-tracker reads; only this file and log.cpp agree on the byte layout.
-"""
+# Turns one Waymo v2 parquet segment into the binary log the C++
+# tracker reads; only this file and log.cpp agree on the layout.
 
 import argparse
 import struct
@@ -20,7 +18,7 @@ PEDESTRIAN_TYPE = 2
 CYCLIST_TYPE = 4
 
 
-# Wraps an angle into (-pi, pi] using complex exponentials.
+# Wraps an angle in radians into [-pi, pi].
 def wrap_angle(radians):
     return float(np.angle(np.exp(1j * radians)))
 

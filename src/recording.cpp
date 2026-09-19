@@ -16,7 +16,8 @@
 
 namespace {
 
-// Point-cloud height ramp, ellipse and line/label drawing constants.
+// Drawing constants: point height ramp, ellipse sigma and segments,
+// line, label and ego box sizes. Lengths in metres. Chosen.
 constexpr double kPointHeightLow = -2.0;
 constexpr double kPointHeightHigh = 4.0;
 constexpr int kEllipseSegments = 32;
@@ -373,8 +374,8 @@ void write_frame(
 
 }  // namespace
 
-// Writes a finished replay by recomputing each frame's predictions
-// and calling write_frame; nothing here runs live.
+// Opens the .mcap and its three channels, predicts each track's
+// path and logs every frame. Throws on any Foxglove error.
 void save_replay_recording(
     const std::string& path, const SegmentLog& segment,
     const std::vector<std::vector<Track>>& confirmed_tracks_per_frame,

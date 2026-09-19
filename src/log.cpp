@@ -56,8 +56,8 @@ Box read_box(std::ifstream& stream) {
 
 }  // namespace
 
-// Writes the magic and header, then per frame its pose, its
-// points, and its ground truth boxes, all little-endian.
+// Writes the magic and header, then each frame's pose, points and
+// boxes in host byte order; the stager writes little-endian.
 void write_segment_log(const std::string& path,
                        const SegmentLog& segment) {
   std::ofstream stream(path, std::ios::binary);

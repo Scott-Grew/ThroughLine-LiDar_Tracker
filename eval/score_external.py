@@ -1,7 +1,5 @@
-"""
-Scores a tracker export against Waymo's ground truth via shapely
-and motmetrics; motmetrics' MOTP is 1-IoU, opposite metrics.cpp.
-"""
+# Development monitor: scores a tracker export against Waymo's
+# ground truth via shapely and motmetrics. Its MOTP is 1 - IoU.
 
 import argparse
 import pathlib
@@ -17,6 +15,7 @@ sys.path.insert(
 )
 from waymo_boxes import read_labelled_boxes, stable_object_id
 
+# Maps the --class flag's names to Waymo's object type codes.
 CLASS_NAME_TO_WAYMO_TYPE = {
     "vehicle": 1,
     "pedestrian": 2,
@@ -47,8 +46,8 @@ def footprint_polygon(center_x, center_y, length, width, heading):
     return Polygon(world_corners)
 
 
-# 3D IoU: footprint-polygon intersection area times vertical
-# overlap, over the two boxes' volumes; 0.0 if either is zero.
+# 3D IoU: footprint intersection area times vertical overlap,
+# divided by the union volume; 0.0 when the boxes do not overlap.
 def intersection_over_union_3d(first_box, second_box):
     first_footprint = footprint_polygon(
         first_box["center_x"],

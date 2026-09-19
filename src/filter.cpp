@@ -8,8 +8,8 @@
 
 namespace {
 
-// Initial uncertainty for speed and yaw rate, both unmeasured and
-// guessed as zero; wide enough to let early frames correct freely.
+// Initial sigmas for speed (m/s) and yaw rate (rad/s), which start
+// at zero unmeasured; wide so early frames correct them freely.
 constexpr double kInitialSpeedSigma = 10.0;
 constexpr double kInitialYawRateSigma = 1.0;
 
@@ -47,7 +47,7 @@ Eigen::Matrix3d measurement_noise(const FilterNoise& noise) {
 
 }  // namespace
 
-// Wraps an angle into (-pi, pi]. Every heading difference in this
+// Wraps an angle into [-pi, pi]. Every heading difference in this
 // file must be wrapped, or a near-identical heading reads as huge.
 double wrap_angle(double radians) {
   return std::remainder(radians, 2.0 * M_PI);
@@ -157,8 +157,8 @@ Eigen::Matrix3d innovation_covariance(const TrackState& state,
          measurement_noise(noise);
 }
 
-// Innovation expressed in units of standard deviations rather than
-// metres; the tracker gates and rejects matches on this distance.
+// Squared innovation distance in standard deviations, unitless;
+// the tracker uses it as the match cost and gates on it.
 double mahalanobis_squared(const TrackState& state,
                            const Box& measurement,
                            const FilterNoise& noise) {

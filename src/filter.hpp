@@ -8,12 +8,12 @@
 // Process and measurement noise the filter uses to weigh a
 // prediction against a measurement.
 struct FilterNoise {
-  // Unmodelled acceleration per frame; grows uncertainty between
-  // measurements. Chosen: linear in m/s^2, yaw in rad/s^2.
+  // Process noise: sigma of unmodelled linear (m/s^2) and yaw
+  // (rad/s^2) acceleration. Chosen.
   double sigma_acceleration = 2.0;
   double sigma_yaw_acceleration = 0.5;
-  // Box jitter, measured per segment by stage_segment.py. Position in
-  // metres, yaw in radians; a zero position sigma is refused.
+  // Box jitter measured per segment by stage_segment.py: position in
+  // metres, yaw in radians. initial_state refuses a sigma <= 0.
   double sigma_measurement_position = 0.0;
   double sigma_measurement_yaw = 0.0;
 };
