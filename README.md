@@ -33,7 +33,7 @@ object is gone.
 
 One frame takes 0.07 milliseconds on average and never more than 0.7. The car gives it 100.
 
-## How it works
+## Architecture
 
 ![Architecture flowchart](architecture.png)
 
