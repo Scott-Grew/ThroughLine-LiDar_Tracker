@@ -35,7 +35,29 @@ One frame takes 0.07 milliseconds on average and never more than 0.7. The car gi
 
 ## Architecture
 
-![Architecture flowchart](docs/media/architecture-flowchart.png)
+```mermaid
+flowchart TD
+    LOG["src/log.cpp, src/perturb.cpp<br/>labelled 3D boxes,<br/>ten frames a second,<br/>optional faults"]
+
+    subgraph FRAME["Every frame, src/tracker.cpp"]
+        PREDICT["src/filter.cpp<br/>move each known object<br/>by its speed and turn rate"]
+        MATCH["src/assign.cpp<br/>match boxes to objects,<br/>far-apart pairs thrown out"]
+        UPDATE["Matched<br/>update with the new box"]
+        BIRTH["Box with no match<br/>start a new track"]
+        COAST["Object with no match<br/>coast, drop after<br/>five misses"]
+        PREDICT --> MATCH
+        MATCH --> UPDATE & BIRTH & COAST
+    end
+
+    TRACKS["Tracks<br/>ID, position,<br/>speed, turn rate"]
+    FORECAST["src/predict.cpp<br/>where each object will be<br/>in a few seconds"]
+    RECORD["src/recording.cpp<br/>playback in Lichtblick"]
+    SCORE["src/export.cpp, eval/<br/>scored by Waymo's<br/>tracking metrics"]
+
+    LOG --> PREDICT
+    UPDATE & BIRTH & COAST --> TRACKS
+    TRACKS --> FORECAST & RECORD & SCORE
+```
 
 Every frame, three steps.
 
