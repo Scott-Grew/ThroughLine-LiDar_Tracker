@@ -35,7 +35,7 @@ One frame takes 0.07 milliseconds on average and never more than 0.7. The car gi
 
 ## Architecture
 
-![Architecture flowchart](docs/media/architecture.png)
+![Architecture flowchart](docs/media/flowchart.png)
 
 Every frame, three steps.
 
