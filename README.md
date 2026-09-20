@@ -35,6 +35,8 @@ One frame takes 0.07 milliseconds on average and never more than 0.7. The car gi
 
 ## How it works
 
+![Architecture flowchart](architecture.png)
+
 Every frame, three steps.
 
 1. Move each known object forward using its last speed and turn rate, and get a bit less sure
