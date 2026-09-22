@@ -1,10 +1,13 @@
+// Shared data shapes used across the pipeline: detections, ground
+// truth, frames, filter state and tracks. Each module includes it.
+
 #pragma once
 #include <cstdint>
 #include <vector>
 #include <Eigen/Dense>
 
-// Shared data shapes used across the pipeline: detections, ground
-// truth, frames, filter state and tracks. Every module includes it.
+// Microseconds in one second, shared by all timestamp conversions.
+constexpr std::int64_t kMicrosPerSecond = 1'000'000;
 
 // The object classes a detection or track can belong to; the
 // values are Waymo's own type codes, stored as-is in the log.
@@ -51,6 +54,14 @@ struct Frame {
   std::vector<GroundTruthBox> ground_truth;
 };
 
+// Rows of TrackState::mean and of both covariance axes. A measured
+// box fills the first three, so they also index the innovation.
+constexpr int kPositionXIndex = 0;
+constexpr int kPositionYIndex = 1;
+constexpr int kYawIndex = 2;
+constexpr int kSpeedIndex = 3;
+constexpr int kYawRateIndex = 4;
+
 // Filter mean and covariance over x, y, yaw, speed and yaw rate in
 // the world frame (m, rad, m/s, rad/s), plus smoothed box size.
 struct TrackState {
@@ -60,11 +71,7 @@ struct TrackState {
 };
 
 // A track's life-cycle stage: tentative, confirmed or coasting.
-enum class TrackStatus : std::uint8_t {
-  Tentative,
-  Confirmed,
-  Coasting
-};
+enum class TrackStatus : std::uint8_t { Tentative, Confirmed, Coasting };
 
 // One tracked object: identity, class, life-cycle state, current
 // filter state and its recent position history for drawing.

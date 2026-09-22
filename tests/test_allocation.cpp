@@ -1,3 +1,6 @@
+// Checks that Tracker::step makes the same number of heap allocations per
+// frame once a scene is steady, by counting calls to global operator new.
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
@@ -7,20 +10,13 @@
 #include "synthetic.hpp"
 #include "tracker.hpp"
 
-// This file checks that a tracker running over an ordinary scene
-// settles down: once every track is confirmed and nothing is being
-// created or destroyed, stepping the tracker one more frame should
-// cost the same handful of allocations it cost the frame before, not
-// more. Growing allocation counts in a scene that never changes shape
-// is exactly what a slow leak or an accidental per-frame reallocation
-// looks like before it becomes a real-time problem, so global new and
-// delete are replaced here with counting versions for the length of
-// this file.
-
 namespace {
+// Calls to operator new since the test binary started.
 std::size_t g_allocation_count = 0;
-}
+}  // namespace
 
+// Counting replacement for global operator new; it applies to the whole
+// test binary, not only this file.
 void* operator new(std::size_t size) {
   ++g_allocation_count;
   void* pointer = std::malloc(size);
@@ -28,39 +24,39 @@ void* operator new(std::size_t size) {
   return pointer;
 }
 
+// Frees memory from the counting operator new, which uses malloc.
 void operator delete(void* pointer) noexcept {
   std::free(pointer);
 }
 
+// Sized form of the delete above.
 void operator delete(void* pointer, std::size_t) noexcept {
   std::free(pointer);
 }
 
-TEST_CASE(
-    "tracker step allocation count does not grow across a steady "
-    "scene") {
+// Compares the allocations step() makes at frame 20 and at frame 40 of a
+// six-object scene with no dropout, where no track starts or ends between.
+TEST_CASE("step allocation count is steady") {
   const SegmentLog segment = make_synthetic_segment(40, 6, 11);
 
   TrackerSettings settings;
-  settings.noise.sigma_measurement_position = 0.1;
-  settings.noise.sigma_measurement_yaw = 0.02;
+  settings.noise = kTestNoise;
   Tracker tracker(settings);
 
   std::size_t allocations_at_frame_20 = 0;
   std::size_t allocations_at_frame_40 = 0;
 
-  for (std::size_t frame_index = 0;
-       frame_index < segment.frames.size(); ++frame_index) {
+  for (std::size_t frame_index = 0; frame_index < segment.frames.size();
+       ++frame_index) {
     const Frame& frame = segment.frames[frame_index];
     std::vector<Detection> detections;
     detections.reserve(frame.ground_truth.size());
-    for (const GroundTruthBox& truth : frame.ground_truth)
+    for (const GroundTruthBox& ground_truth_box : frame.ground_truth)
       detections.push_back(
-          Detection{truth.object_class, truth.box, 1.0f});
+          Detection{ground_truth_box.object_class, ground_truth_box.box, 1.0f});
 
     const std::size_t allocation_count_before = g_allocation_count;
-    tracker.step(frame.capture_time_micros, detections,
-                 frame.vehicle_to_world);
+    tracker.step(frame.capture_time_micros, detections, frame.vehicle_to_world);
     const std::size_t allocation_count_after = g_allocation_count;
 
     if (frame_index == 19)

@@ -1,107 +1,86 @@
+// Checks the filter's reported covariance against its real error using
+// NEES, the squared error in units of the filter's own covariance.
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <random>
 #include <vector>
 #include "filter.hpp"
-
-// This file checks that the filter's own idea of its uncertainty is
-// honest. A filter that reports a covariance can be wrong in two
-// directions - too sure of itself, or needlessly unsure - and either
-// one is invisible from the mean alone. NEES (the squared error
-// measured in units of the filter's own uncertainty) is the standard
-// way to catch both: averaged over enough independent runs, it should
-// land within a known band around five, one for each of the five
-// numbers the filter tracks. A truth trajectory is generated with
-// genuinely random accelerations, using the exact same sigmas the
-// filter's own process noise assumes, so a passing test says the
-// filter's covariance is neither overclaiming nor underclaiming what
-// a real object actually does between sightings.
+#include "synthetic.hpp"
 
 namespace {
 
-constexpr double kStepSeconds = 0.1;
+// Run sizes are chosen. The band is the 95% interval for the mean of 50
+// NEES values with 5 degrees of freedom: 5 +/- 1.96 * sqrt(2 * 5 / 50).
 constexpr int kStepCount = 200;
 constexpr int kWarmupSteps = 20;
 constexpr int kRunCount = 50;
 constexpr double kBandLow = 4.12;
 constexpr double kBandHigh = 5.88;
+constexpr double kRequiredFractionInsideBand = 0.90;
 
-// Runs one random truth trajectory through the filter and returns the
-// NEES at every step. The truth is not the filter's own motion model
-// handed noise-free numbers - it is pushed by a genuinely random
-// acceleration each step, along the way it is already facing, which
-// is exactly the unmodelled push the filter's process noise is meant
-// to account for.
+// Returns the NEES at each step of one seeded run. Truth is pushed by random
+// accelerations drawn with the sigmas the filter's process noise assumes.
 std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
   std::mt19937_64 generator(seed);
-  std::normal_distribution<double> acceleration_draw(0.0, 2.0);
-  std::normal_distribution<double> yaw_acceleration_draw(0.0, 0.5);
-  std::normal_distribution<double> position_measurement_noise(0.0,
-                                                              0.1);
-  std::normal_distribution<double> yaw_measurement_noise(0.0, 0.02);
+  std::normal_distribution<double> acceleration_draw(
+      0.0, kTestNoise.sigma_acceleration);
+  std::normal_distribution<double> yaw_acceleration_draw(
+      0.0, kTestNoise.sigma_yaw_acceleration);
+  std::normal_distribution<double> position_measurement_noise(
+      0.0, kTestNoise.sigma_measurement_position);
+  std::normal_distribution<double> yaw_measurement_noise(
+      0.0, kTestNoise.sigma_measurement_yaw);
 
-  double truth_x = 0.0, truth_y = 0.0, truth_yaw = 0.0;
-  double truth_speed = 8.0, truth_yaw_rate = 0.05;
+  TruthMotion truth{0.0, 0.0, 0.0, 8.0, 0.05};
 
-  const FilterNoise noise{2.0, 0.5, 0.1, 0.02};
+  const FilterNoise noise = kTestNoise;
 
   const Box first_measurement{
-      truth_x + position_measurement_noise(generator),
-      truth_y + position_measurement_noise(generator),
+      truth.x + position_measurement_noise(generator),
+      truth.y + position_measurement_noise(generator),
       0.0,
-      4.5,
-      2.0,
-      1.6,
-      wrap_angle(truth_yaw + yaw_measurement_noise(generator))};
+      kTestVehicleLength,
+      kTestVehicleWidth,
+      kTestVehicleHeight,
+      wrap_angle(truth.yaw + yaw_measurement_noise(generator))};
   TrackState state = initial_state(first_measurement, noise);
 
   std::vector<double> nees_per_step(kStepCount, 0.0);
 
   for (int step = 1; step <= kStepCount; ++step) {
-    const double yaw = truth_yaw;
-    const double speed = truth_speed;
-    const double yaw_rate = truth_yaw_rate;
+    const double yaw_before_step = truth.yaw;
 
-    if (std::abs(yaw_rate) < 1e-4) {
-      truth_x += speed * std::cos(yaw) * kStepSeconds;
-      truth_y += speed * std::sin(yaw) * kStepSeconds;
-    } else {
-      const double yaw_next = yaw + yaw_rate * kStepSeconds;
-      const double radius = speed / yaw_rate;
-      truth_x += radius * (std::sin(yaw_next) - std::sin(yaw));
-      truth_y += radius * (std::cos(yaw) - std::cos(yaw_next));
-      truth_yaw = yaw_next;
-    }
+    advance_constant_turn_rate(truth, kTestStepSeconds);
 
     const double acceleration = acceleration_draw(generator);
     const double yaw_acceleration = yaw_acceleration_draw(generator);
-    truth_speed += acceleration * kStepSeconds;
-    truth_yaw_rate += yaw_acceleration * kStepSeconds;
-    truth_x += 0.5 * acceleration * kStepSeconds * kStepSeconds *
-               std::cos(yaw);
-    truth_y += 0.5 * acceleration * kStepSeconds * kStepSeconds *
-               std::sin(yaw);
-    truth_yaw += 0.5 * yaw_acceleration * kStepSeconds * kStepSeconds;
-    truth_yaw = wrap_angle(truth_yaw);
+    truth.speed += acceleration * kTestStepSeconds;
+    truth.yaw_rate += yaw_acceleration * kTestStepSeconds;
+    truth.x += 0.5 * acceleration * kTestStepSeconds * kTestStepSeconds *
+               std::cos(yaw_before_step);
+    truth.y += 0.5 * acceleration * kTestStepSeconds * kTestStepSeconds *
+               std::sin(yaw_before_step);
+    truth.yaw += 0.5 * yaw_acceleration * kTestStepSeconds * kTestStepSeconds;
+    truth.yaw = wrap_angle(truth.yaw);
 
-    predict(state, kStepSeconds, noise);
+    predict(state, kTestStepSeconds, noise);
 
     const Box measurement{
-        truth_x + position_measurement_noise(generator),
-        truth_y + position_measurement_noise(generator),
+        truth.x + position_measurement_noise(generator),
+        truth.y + position_measurement_noise(generator),
         0.0,
-        4.5,
-        2.0,
-        1.6,
-        wrap_angle(truth_yaw + yaw_measurement_noise(generator))};
+        kTestVehicleLength,
+        kTestVehicleWidth,
+        kTestVehicleHeight,
+        wrap_angle(truth.yaw + yaw_measurement_noise(generator))};
     update(state, measurement, noise);
 
     Eigen::Matrix<double, 5, 1> truth_vector;
-    truth_vector << truth_x, truth_y, truth_yaw, truth_speed,
-        truth_yaw_rate;
+    truth_vector << truth.x, truth.y, truth.yaw, truth.speed, truth.yaw_rate;
     Eigen::Matrix<double, 5, 1> error = state.mean - truth_vector;
-    error(2) = wrap_angle(error(2));
+    error(kYawIndex) = wrap_angle(error(kYawIndex));
     nees_per_step[step - 1] =
         error.transpose() * state.covariance.ldlt().solve(error);
   }
@@ -111,13 +90,12 @@ std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
 
 }  // namespace
 
-TEST_CASE(
-    "filter NEES averaged over independent runs lies inside the "
-    "chi-square band") {
+// Averages NEES over kRunCount seeds per step; the required fraction of the
+// steps after warm-up must land inside the band.
+TEST_CASE("filter NEES stays inside the chi-square band") {
   std::vector<double> step_sum(kStepCount, 0.0);
   for (std::uint64_t seed = 1; seed <= kRunCount; ++seed) {
-    const std::vector<double> nees_per_step =
-        nees_per_step_for_seed(seed);
+    const std::vector<double> nees_per_step = nees_per_step_for_seed(seed);
     for (int step = 0; step < kStepCount; ++step)
       step_sum[step] += nees_per_step[step];
   }
@@ -139,5 +117,5 @@ TEST_CASE(
   INFO("fraction of per-step averages inside the band: "
        << fraction_inside_band);
   INFO("mean of per-step averages: " << mean_of_averages);
-  REQUIRE(fraction_inside_band >= 0.90);
+  REQUIRE(fraction_inside_band >= kRequiredFractionInsideBand);
 }

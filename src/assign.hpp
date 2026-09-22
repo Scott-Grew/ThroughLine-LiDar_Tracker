@@ -1,9 +1,9 @@
+// Matches tracks to detections from a track-by-detection cost
+// grid; called once per object class per frame by the tracker.
+
 #pragma once
 #include <vector>
 #include <Eigen/Dense>
-
-// Matches tracks to detections from a track-by-detection cost
-// grid; called once per object class per frame by the tracker.
 
 // Which solver assign() runs: optimal Hungarian or cheapest-first.
 enum class AssignmentMethod { Hungarian, Greedy };
@@ -16,5 +16,6 @@ struct Assignment {
   std::vector<int> unmatched_columns;
 };
 
+// Assignment of pairs under gate by method, with rows/columns left unmatched.
 Assignment assign(const Eigen::MatrixXd& cost, double gate,
                   AssignmentMethod method);
