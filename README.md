@@ -12,7 +12,7 @@ which way it is turning, and it guesses where it will be a few seconds from now.
 *Blue boxes are tracked cars. The line in front of each one is where the tracker thinks it is
 going.*
 
-## How well it works
+## Results
 
 The tracker is given Waymo's hand-labelled boxes as its input. It does not detect objects
 itself. That means these scores only measure the tracking, and they can't be compared to
@@ -76,10 +76,12 @@ You need `cmake`, `zstd` and `lz4` from Homebrew. The tests make their own fake 
 don't need any data.
 
 ```
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j2
-./build/tracker_tests
+make test
 ```
+
+`make run` tracks a staged clip and writes `tracks.csv`, `make record` writes an `.mcap` for
+Lichtblick, and `make official` scores the export with Waymo's evaluator. `make help` lists
+every target.
 
 Waymo doesn't allow their data to be shared, so the clips above can't be re-run without a Waymo
 account. `stage/` turns their data into the tracker's format and `eval/` runs their scoring
