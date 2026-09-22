@@ -5,6 +5,7 @@ Only this file and src/log.cpp know the byte layout; change them together.
 
 import argparse
 import struct
+from typing import NamedTuple, Optional
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -38,6 +39,24 @@ POSE_COLUMNS = (
     "[VehiclePoseComponent].world_from_vehicle.transform",
 )
 
+
+class LaserCalibration(NamedTuple):
+    """One laser's calibration, its sensor-to-vehicle transform and the beam
+    inclinations in radians, listed per row when Waymo gives them."""
+    extrinsic: np.ndarray  # (4, 4) float64
+    inclination_min: float
+    inclination_max: float
+    inclination_values: Optional[np.ndarray]  # (rows,) or None
+
+
+class StagedFrame(NamedTuple):
+    """One frame ready to write to the staged log."""
+    capture_time_micros: int
+    vehicle_to_world: np.ndarray  # (4, 4) float64
+    points: np.ndarray  # (N, 3) float32 vehicle-frame metres
+    ground_truth: list  # GroundTruthBox rows visible in the frame
+
+
 # Accepted range for staged points in boxes over Waymo's reported count.
 MIN_POINT_RATIO = 0.5
 MAX_POINT_RATIO = 1.5
@@ -48,8 +67,7 @@ def wrap_angle(radians):
 
 
 def read_calibration(parquet_root, segment_name, laser):
-    """Returns the requested laser's calibration dict, with a 4x4
-    float64 extrinsic transform and its beam inclination bounds/values."""
+    """Returns the requested laser's LaserCalibration."""
     calibration_table = pq.read_table(
         f"{parquet_root}/lidar_calibration/{segment_name}.parquet")
 
@@ -66,14 +84,14 @@ def read_calibration(parquet_root, segment_name, laser):
             inclination_max,
             inclination_values,
     ) in zip(*columns):
-        calibration_by_laser[laser_name] = {
-            "extrinsic": np.array(extrinsic, dtype = np.float64).reshape(4, 4),
-            "inclination_min": inclination_min,
-            "inclination_max": inclination_max,
-            "inclination_values":
-                (np.array(inclination_values, dtype = np.float64)
-                 if inclination_values else None),
-        }
+        calibration_by_laser[laser_name] = LaserCalibration(
+            extrinsic = np.array(extrinsic, dtype = np.float64).reshape(4, 4),
+            inclination_min = inclination_min,
+            inclination_max = inclination_max,
+            inclination_values = (np.array(inclination_values,
+                                           dtype = np.float64)
+                                  if inclination_values else None),
+        )
     return calibration_by_laser[laser]
 
 
@@ -122,10 +140,7 @@ def read_pose_by_frame(parquet_root, segment_name):
 def read_components(parquet_root, segment_name, laser):
     """Returns the segment's frames in time order, for one laser.
 
-    Each frame is a dict holding capture_time_micros, vehicle_to_world as a
-    (4, 4) float64 array, points as (N, 3) float32 vehicle-frame metres, and
-    ground_truth as a list of GroundTruthBox. Frames without a pose are
-    skipped.
+    Frames without a pose are skipped.
     """
     calibration = read_calibration(parquet_root, segment_name, laser)
     points_by_frame = read_points_by_frame(parquet_root, segment_name, laser,
@@ -138,13 +153,15 @@ def read_components(parquet_root, segment_name, laser):
     for capture_time_micros in sorted(points_by_frame):
         if capture_time_micros not in pose_by_frame:
             continue
-        frames.append({
-            "capture_time_micros": capture_time_micros,
-            "vehicle_to_world": np.array(pose_by_frame[capture_time_micros],
-                                         dtype = np.float64).reshape(4, 4),
-            "points": points_by_frame[capture_time_micros],
-            "ground_truth": ground_truth_by_frame.get(capture_time_micros, []),
-        })
+        frames.append(
+            StagedFrame(
+                capture_time_micros = capture_time_micros,
+                vehicle_to_world = np.array(pose_by_frame[capture_time_micros],
+                                            dtype = np.float64).reshape(4, 4),
+                points = points_by_frame[capture_time_micros],
+                ground_truth = ground_truth_by_frame.get(
+                    capture_time_micros, []),
+            ))
     return frames
 
 
@@ -161,19 +178,19 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
                                                        channel_count)
     range_channel = range_image[:, :, 0]
 
-    inclination_values = calibration["inclination_values"]
+    inclination_values = calibration.inclination_values
     if (inclination_values is not None and len(inclination_values) == height):
         # Calibration's inclination list runs opposite the image's
         # row order, hence the reversal.
         inclinations = inclination_values[::-1]
     else:
         inclinations = np.linspace(
-            calibration["inclination_max"],
-            calibration["inclination_min"],
+            calibration.inclination_max,
+            calibration.inclination_min,
             height,
         )
 
-    extrinsic = calibration["extrinsic"]
+    extrinsic = calibration.extrinsic
     azimuth_correction = np.arctan2(extrinsic[1, 0], extrinsic[0, 0])
     column_indices = np.arange(width)
     # Column c sits at azimuth pi - (c + 0.5) * 2 pi / width in the sensor
@@ -297,16 +314,16 @@ def write_log(path, segment_name, frames, position_sigma, yaw_sigma):
         stream.write(name_bytes)
         stream.write(struct.pack("<2d", position_sigma, yaw_sigma))
         for frame in frames:
-            stream.write(struct.pack("<q", frame["capture_time_micros"]))
+            stream.write(struct.pack("<q", frame.capture_time_micros))
             stream.write(
                 struct.pack(
                     "<16d",
-                    *frame["vehicle_to_world"].flatten().tolist(),
+                    *frame.vehicle_to_world.flatten().tolist(),
                 ))
-            points = frame["points"]
+            points = frame.points
             stream.write(struct.pack("<I", len(points)))
             stream.write(points.astype("<f4").tobytes())
-            ground_truth = frame["ground_truth"]
+            ground_truth = frame.ground_truth
             stream.write(struct.pack("<I", len(ground_truth)))
             for ground_truth_box in ground_truth:
                 stream.write(
@@ -323,11 +340,11 @@ def check_point_ratio(first_frame):
     """Prints the first frame's staged/reported point ratio, and a warning
     if it falls outside [MIN_POINT_RATIO, MAX_POINT_RATIO]."""
     staged_points_in_boxes = sum(
-        count_points_in_box(first_frame["points"], ground_truth_box.box)
-        for ground_truth_box in first_frame["ground_truth"])
+        count_points_in_box(first_frame.points, ground_truth_box.box)
+        for ground_truth_box in first_frame.ground_truth)
     reported_points_in_boxes = sum(
         ground_truth_box.num_lidar_points_in_box
-        for ground_truth_box in first_frame["ground_truth"])
+        for ground_truth_box in first_frame.ground_truth)
     if reported_points_in_boxes:
         point_ratio = staged_points_in_boxes / reported_points_in_boxes
     else:
@@ -353,7 +370,7 @@ def main():
         check_point_ratio(frames[0])
 
     position_sigma, yaw_sigma = measure_box_jitter(
-        [frame["ground_truth"] for frame in frames])
+        [frame.ground_truth for frame in frames])
 
     write_log(
         arguments.out,

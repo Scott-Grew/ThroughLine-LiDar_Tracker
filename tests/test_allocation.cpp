@@ -11,6 +11,12 @@
 #include "tracker.hpp"
 
 namespace {
+
+// A six-object scene long enough to reach a steady state by frame 20.
+constexpr int kFrameCount = 40;
+constexpr int kObjectCount = 6;
+constexpr std::uint64_t kSceneSeed = 11;
+
 std::size_t g_allocation_count = 0;
 }  // namespace
 
@@ -34,7 +40,8 @@ void operator delete(void* pointer, std::size_t) noexcept {
 // Compares the allocations step() makes at frame 20 and at frame 40 of a
 // six-object scene with no dropout, where no track starts or ends between.
 TEST_CASE("step allocation count is steady") {
-  const SegmentLog segment = make_synthetic_segment(40, 6, 11);
+  const SegmentLog segment =
+      make_synthetic_segment(kFrameCount, kObjectCount, kSceneSeed);
 
   TrackerSettings settings;
   settings.noise = kTestNoise;

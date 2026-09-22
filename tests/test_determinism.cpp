@@ -10,6 +10,17 @@
 
 namespace {
 
+// The synthetic scene the tests replay: its frames, its objects and the
+// seed that places them.
+constexpr int kFrameCount = 30;
+constexpr int kObjectCount = 5;
+constexpr std::uint64_t kSceneSeed = 42;
+
+// Dropout and perturbation seeds for the replays under test.
+constexpr double kReproducedDropout = 0.3;
+constexpr std::uint64_t kReproducedSeed = 7;
+constexpr std::uint64_t kDropoutSweepSeed = 3;
+
 bool tracks_identical(const std::vector<std::vector<Track>>& first,
                       const std::vector<std::vector<Track>>& second) {
   if (first.size() != second.size()) return false;
@@ -44,7 +55,8 @@ std::vector<std::vector<Track>> run_replay(const SegmentLog& segment,
 // Writes a segment to a temporary log and reads it back, comparing the
 // frame count and the first and last box exactly.
 TEST_CASE("segment log round-trips") {
-  const SegmentLog segment = make_synthetic_segment(30, 5, 42);
+  const SegmentLog segment =
+      make_synthetic_segment(kFrameCount, kObjectCount, kSceneSeed);
 
   const std::filesystem::path temp_path =
       std::filesystem::temp_directory_path() / "tracker_test_segment.trklog";
@@ -69,19 +81,22 @@ TEST_CASE("segment log round-trips") {
 // Two replays of one segment at dropout 0.3 with the same seed must agree
 // exactly, frame for frame.
 TEST_CASE("same seed gives identical tracks") {
-  const SegmentLog segment = make_synthetic_segment(30, 5, 42);
-  REQUIRE(tracks_identical(run_replay(segment, 0.3, 7),
-                           run_replay(segment, 0.3, 7)));
+  const SegmentLog segment =
+      make_synthetic_segment(kFrameCount, kObjectCount, kSceneSeed);
+  REQUIRE(tracks_identical(
+      run_replay(segment, kReproducedDropout, kReproducedSeed),
+      run_replay(segment, kReproducedDropout, kReproducedSeed)));
 }
 
 // Replays at dropout 0, 0.5 and 1 must confirm fewer track instances as
 // dropout rises, which a run compared only with itself could not show.
 TEST_CASE("dropout setting reaches the tracker") {
-  const SegmentLog segment = make_synthetic_segment(30, 5, 42);
+  const SegmentLog segment =
+      make_synthetic_segment(kFrameCount, kObjectCount, kSceneSeed);
   const auto confirmed_count = [&](double dropout) {
     std::size_t confirmed_instance_count = 0;
     for (const std::vector<Track>& frame_tracks :
-         run_replay(segment, dropout, 3))
+         run_replay(segment, dropout, kDropoutSweepSeed))
       confirmed_instance_count += frame_tracks.size();
     return confirmed_instance_count;
   };
