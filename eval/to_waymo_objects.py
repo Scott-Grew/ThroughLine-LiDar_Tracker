@@ -71,7 +71,6 @@ def build_prediction_objects(tracks_path, segment_name):
 
 
 def main():
-    """Builds both protos and writes each to its own file."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required = True)
     parser.add_argument("--segment", dest = "segment_name", required = True)

@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Prints Waymo's official 3D tracking metrics for one segment's track export:
-# converts both inputs to Objects protos and runs Waymo's binary in a container.
+# Prints Waymo's official 3D tracking metrics for one track export. It
+# converts both inputs to Objects protos and runs Waymo's binary in Docker.
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then

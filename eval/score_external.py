@@ -1,4 +1,5 @@
-"""Development monitor: scores a tracker export against Waymo's ground truth.
+"""Development monitor that scores a tracker export against Waymo's ground
+truth.
 
 Matching uses shapely for 3D IoU and motmetrics for the CLEAR MOT numbers;
 the MOTP it prints is 1 - IoU.
@@ -32,15 +33,15 @@ DEFAULT_IOU_THRESHOLD = 0.7
 
 
 class IdentifiedBox(NamedTuple):
-    """A box with the identity motmetrics matches on: the hashed Waymo
-    object id for ground truth, the track id for a prediction."""
+    """A box with the identity motmetrics matches on, the hashed Waymo
+    object id for ground truth and the track id for a prediction."""
     identity: int
     box: Box
 
 
 def footprint_polygon(box):
-    """Returns the box's bird's-eye footprint as a shapely Polygon; centre,
-    length and width in metres, yaw in radians."""
+    """Returns the box's bird's-eye footprint as a shapely Polygon, with
+    centre, length and width in metres and yaw in radians."""
     half_length = box.length / 2.0
     half_width = box.width / 2.0
     local_corners = [
@@ -51,6 +52,8 @@ def footprint_polygon(box):
     ]
     cosine = np.cos(box.yaw)
     sine = np.sin(box.yaw)
+    # Each corner (x, y) rotates by yaw to (x cos - y sin, x sin + y cos)
+    # and then shifts to the box centre.
     world_corners = [(
         box.center_x + cosine * local_x - sine * local_y,
         box.center_y + sine * local_x + cosine * local_y,
@@ -59,8 +62,8 @@ def footprint_polygon(box):
 
 
 def intersection_over_union_3d(first_box, second_box):
-    """Returns the 3D IoU of two Box given in the same frame: footprint
-    overlap area times vertical overlap, over the union volume."""
+    """Returns the 3D IoU of two Box in the same frame, the footprint overlap
+    area times the vertical overlap over the union volume."""
     first_footprint = footprint_polygon(first_box)
     second_footprint = footprint_polygon(second_box)
     footprint_intersection_area = first_footprint.intersection(
@@ -139,7 +142,6 @@ def read_predictions(tracks_path, class_name):
 
 
 def parse_arguments():
-    """Returns the parsed command-line arguments for this script."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required = True)
     parser.add_argument("--segment", dest = "segment_name", required = True)
@@ -200,7 +202,6 @@ def accumulate_frames(ground_truth_by_frame, predictions_by_frame,
 
 
 def main():
-    """Scores one class of one segment and prints the CLEAR MOT summary."""
     arguments = parse_arguments()
 
     ground_truth_by_frame = read_ground_truth(

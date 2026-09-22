@@ -1,6 +1,3 @@
-# One-word commands for the pipeline: build, test, stage, run, record, score.
-# Override any variable on the command line, e.g. make run DROPOUT=0.3.
-
 SEGMENT ?= 10203656353524179475_7625_000_7645_000
 DATA    ?= $(HOME)/waymo-data
 PYTHON  ?= python3

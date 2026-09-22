@@ -1,16 +1,13 @@
-// Predicts a track's future path for the recording to draw; nothing
-// in the tracker depends on this file or the copy it predicts from.
+// Predicts a track's future path for the recording to draw, from a
+// copy of the track's filter state.
 
 #include "predict.hpp"
 
 #include <cmath>
 
-// Stores the process noise applied while forecasting a track's state.
 ConstantTurnRatePredictor::ConstantTurnRatePredictor(FilterNoise noise)
     : noise_(noise) {}
 
-// Forecasts a copy of the track's state forward in fixed steps out to
-// the horizon, widening its uncertainty with each simulated step.
 PredictedPath ConstantTurnRatePredictor::predict(const Track& track,
                                                  double horizon_seconds,
                                                  double step_seconds) const {

@@ -11,21 +11,18 @@
 
 namespace {
 
-// Sizes of the randomised comparison and the weight that ranks pair count.
+// Sizes of the randomised comparison and the weight that ranks pair count,
+// which exceeds any total cost these small grids can reach.
 constexpr int kTrialCount = 200;
 constexpr int kMaxGridSide = 6;
 constexpr double kUnreachableFraction = 0.2;
 constexpr double kGate = 8.0;
 constexpr double kPairCountWeight = 1e6;
 
-// Scores a solution so more pairs always wins and lower cost breaks ties;
-// the 1e6 per pair exceeds any total cost these small grids can reach.
 double objective(int pair_count, double total_cost) {
   return -static_cast<double>(pair_count) * kPairCountWeight + total_cost;
 }
 
-// Returns the best objective over all ways to pair rows from `row` onward
-// with unused columns under the gate, by trying each one.
 double best_brute_force_objective(const Eigen::MatrixXd& cost, double gate,
                                   int row, std::vector<bool>& column_used,
                                   int pair_count, double total_cost) {

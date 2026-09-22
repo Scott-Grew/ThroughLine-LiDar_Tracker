@@ -17,8 +17,6 @@ struct Candidate {
   int column;
 };
 
-// Takes pairings under the gate cheapest first, keeping ones whose
-// row and column are still free; can miss a cheaper overall match.
 std::vector<std::pair<int, int>> greedy_pairs(const Eigen::MatrixXd& cost,
                                               double gate) {
   std::vector<Candidate> candidates;
@@ -44,16 +42,14 @@ std::vector<std::pair<int, int>> greedy_pairs(const Eigen::MatrixXd& cost,
   return pairs;
 }
 
-// dlib solves over integers; costs are at most the gate (about
-// 11), so this scale keeps six decimal places of resolution.
+// dlib solves over integers. Costs are squared Mahalanobis distances at
+// most the gate, so this scale keeps six decimal places of resolution.
 constexpr double kCostScale = 1e6;
 
 // Bonus each gated pairing earns on top of its cost, bigger
 // than any total the scaled costs reach, so a match always wins.
 constexpr long kPairReward = 1000000000000L;
 
-// The optimal pairing, from dlib's Hungarian solver run on a
-// zero-padded square copy of the rectangular gated grid.
 std::vector<std::pair<int, int>> hungarian_pairs(const Eigen::MatrixXd& cost,
                                                  double gate) {
   const long row_count = cost.rows();
@@ -83,8 +79,6 @@ std::vector<std::pair<int, int>> hungarian_pairs(const Eigen::MatrixXd& cost,
 
 }  // namespace
 
-// Runs the requested method, then derives which rows and columns
-// were left unmatched; feeds the track life cycle in tracker.cpp.
 Assignment assign(const Eigen::MatrixXd& cost, double gate,
                   AssignmentMethod method) {
   Assignment assignment;

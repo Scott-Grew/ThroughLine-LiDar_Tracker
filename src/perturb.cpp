@@ -3,12 +3,9 @@
 
 #include "perturb.hpp"
 
-// Seeds the fault generator so a run is reproducible from the seed.
 Perturbation::Perturbation(PerturbationSettings settings, std::uint64_t seed)
     : settings_(settings), generator_(seed) {}
 
-// Applies dropout and position noise to each detection in a fixed
-// order, so the same seed reproduces the same faults each run.
 std::vector<Detection> Perturbation::apply(
     const std::vector<Detection>& detections) {
   std::uniform_real_distribution<double> dropout_draw(0.0, 1.0);
@@ -28,8 +25,6 @@ std::vector<Detection> Perturbation::apply(
   return surviving_detections;
 }
 
-// The time a captured detection actually reaches the tracker, after
-// the modelled latency.
 std::int64_t Perturbation::available_time(
     std::int64_t capture_time_micros) const {
   return capture_time_micros + settings_.latency_micros;

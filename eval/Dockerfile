@@ -1,8 +1,6 @@
 # Builds Waymo's compute_tracking_metrics_main from their repository and makes
 # it the entrypoint; run_official.sh passes it the two Objects proto files.
 
-# Single stage on purpose: the bazel base image doubles as the runtime image,
-# so no second base image has to be pulled.
 FROM gcr.io/bazel-public/bazel:6.4.0
 
 # Root, because the base image's default user cannot write into /workspace.

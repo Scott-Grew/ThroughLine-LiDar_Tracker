@@ -16,8 +16,8 @@ TRACKED_OBJECT_CLASSES = (VEHICLE_CLASS, PEDESTRIAN_CLASS, CYCLIST_CLASS)
 
 
 class Box(NamedTuple):
-    """An oriented 3D box: centre and size in metres, yaw in radians. Field
-    order matches struct Box in src/types.hpp and the staged log."""
+    """An oriented 3D box with centre and size in metres and yaw in radians.
+    Field order matches struct Box in src/types.hpp and the staged log."""
     center_x: float
     center_y: float
     center_z: float
@@ -28,8 +28,8 @@ class Box(NamedTuple):
 
 
 class GroundTruthBox(NamedTuple):
-    """One row of Waymo's lidar_box table: a labelled box in the vehicle
-    frame of its capture time, in microseconds."""
+    """One row of Waymo's lidar_box table, a labelled box in the vehicle
+    frame of its capture time in microseconds."""
     capture_time_micros: int
     laser_object_id: str
     object_class: int
@@ -39,8 +39,8 @@ class GroundTruthBox(NamedTuple):
 
 
 def stable_object_id(laser_object_id):
-    """Hashes a laser_object_id string into a uint64, the first 8 bytes of its
-    SHA-1; the staged log and the motmetrics scorer both use this identity."""
+    """Returns the first 8 bytes of the SHA-1 of laser_object_id as a uint64,
+    the identity the staged log and the motmetrics scorer share."""
     digest = hashlib.sha1(laser_object_id.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder = "big")
 
@@ -67,8 +67,8 @@ def read_ground_truth_boxes(parquet_root, segment_name):
     """Returns one GroundTruthBox per row of the segment's lidar_box table,
     unfiltered.
 
-    Boxes are in the vehicle frame of their own capture time: centre and size
-    in metres, yaw in radians, capture_time_micros in microseconds.
+    Boxes are in the vehicle frame of their own capture time, with centre and
+    size in metres, yaw in radians and capture_time_micros in microseconds.
     """
     box_table = pq.read_table(
         f"{parquet_root}/lidar_box/{segment_name}.parquet")

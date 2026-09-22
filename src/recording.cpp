@@ -16,8 +16,8 @@
 
 namespace {
 
-// Drawing constants: point height ramp, ellipse sigma and segments,
-// line, label and ego box sizes. Lengths in metres. Chosen.
+// Drawing constants for the point height ramp, the ellipse, and the line,
+// label and ego box sizes. Lengths are in metres. Chosen.
 constexpr double kPointHeightLow = -2.0;
 constexpr double kPointHeightHigh = 4.0;
 constexpr int kEllipseSegments = 32;
@@ -28,8 +28,6 @@ constexpr double kEgoLength = 5.2, kEgoWidth = 2.4, kEgoHeight = 1.8;
 constexpr double kBoxAlpha = 0.35;
 constexpr double kEgoGrey = 0.8;
 
-// The one colour a class is drawn in across each primitive, box,
-// trail, prediction, ellipse and label, so it reads as one object.
 foxglove::messages::Color class_color(ObjectClass object_class) {
   switch (object_class) {
     case ObjectClass::Vehicle:
@@ -42,8 +40,6 @@ foxglove::messages::Color class_color(ObjectClass object_class) {
   return foxglove::messages::Color{1.0, 1.0, 1.0, 1.0};
 }
 
-// The world-frame translation of frame 0's pose; each position
-// written out has this subtracted to keep it within float precision.
 Eigen::Vector3d recording_origin(const SegmentLog& segment) {
   return segment.frames.front().vehicle_to_world.block<3, 1>(0, 3);
 }
@@ -52,8 +48,6 @@ Eigen::Vector3d recording_origin(const SegmentLog& segment) {
 // the units MCAP and its Foxglove timestamps log at.
 constexpr std::int64_t kNanosPerMicro = 1'000;
 
-// Converts a capture time in microseconds to the Foxglove
-// seconds/nanoseconds timestamp carried on each logged message.
 foxglove::messages::Timestamp to_timestamp(std::int64_t capture_time_micros) {
   return foxglove::messages::Timestamp{
       static_cast<std::uint32_t>(capture_time_micros / kMicrosPerSecond),
@@ -61,14 +55,10 @@ foxglove::messages::Timestamp to_timestamp(std::int64_t capture_time_micros) {
                                  kNanosPerMicro)};
 }
 
-// Converts a capture time in microseconds to nanoseconds, the unit
-// an MCAP channel logs a message's time at.
 std::uint64_t to_nanoseconds(std::int64_t capture_time_micros) {
   return static_cast<std::uint64_t>(capture_time_micros) * kNanosPerMicro;
 }
 
-// A zero position/identity rotation pose, for the point cloud whose
-// points already carry their own world position in the packed data.
 foxglove::messages::Pose identity_pose() {
   foxglove::messages::Pose pose;
   pose.position = foxglove::messages::Vector3{0.0, 0.0, 0.0};
@@ -76,28 +66,23 @@ foxglove::messages::Pose identity_pose() {
   return pose;
 }
 
-// A pose built from a translation and a yaw about z; boxes never
-// need roll or pitch, which the tracker doesn't estimate.
 foxglove::messages::Pose pose_from_translation_yaw(
     const Eigen::Vector3d& translation, double yaw) {
   foxglove::messages::Pose pose;
   pose.position = foxglove::messages::Vector3{translation.x(), translation.y(),
                                               translation.z()};
+  // A rotation of yaw about z is the quaternion (0, 0, sin(yaw/2), cos(yaw/2)).
   pose.orientation = foxglove::messages::Quaternion{
       0.0, 0.0, std::sin(yaw / 2.0), std::cos(yaw / 2.0)};
   return pose;
 }
 
-// Appends one value's raw bytes onto a point cloud's packed data
-// buffer; this is the only way per-point fields get laid down.
 template <typename Value>
 void append_bytes(std::vector<std::byte>& buffer, const Value& value) {
   const auto* value_bytes = reinterpret_cast<const std::byte*>(&value);
   buffer.insert(buffer.end(), value_bytes, value_bytes + sizeof(Value));
 }
 
-// Maps a height to Lichtblick's packed "rgba" uint32 (0xaarrggbb),
-// ramping blue to green to yellow after clamping to the drawn range.
 std::uint32_t height_ramp_color(float height) {
   const float clamped_height =
       std::clamp(height, static_cast<float>(kPointHeightLow),
@@ -105,6 +90,8 @@ std::uint32_t height_ramp_color(float height) {
   const float ramp_fraction =
       (clamped_height - static_cast<float>(kPointHeightLow)) /
       static_cast<float>(kPointHeightHigh - kPointHeightLow);
+  // The colour ramps linearly blue to green over the lower half of the
+  // height range and green to yellow over the upper half.
 
   const Eigen::Vector3f blue(0.0f, 0.0f, 1.0f);
   const Eigen::Vector3f green(0.0f, 1.0f, 0.0f);
@@ -125,11 +112,10 @@ std::uint32_t height_ramp_color(float height) {
   const std::uint32_t blue_channel =
       static_cast<std::uint32_t>(ramp_color.z() * 255.0f);
   const std::uint32_t alpha = 255;
+  // Lichtblick reads the packed rgba field as 0xaarrggbb.
   return (alpha << 24) | (red << 16) | (green_channel << 8) | blue_channel;
 }
 
-// Builds a ring of points kEllipseSigma std devs along each
-// covariance eigenvector, for a LINE_LOOP uncertainty ellipse.
 std::vector<foxglove::messages::Point3> ellipse_points(
     const Eigen::Vector2d& center, const Eigen::Matrix2d& covariance,
     double height, const Eigen::Vector3d& origin) {
@@ -139,7 +125,8 @@ std::vector<foxglove::messages::Point3> ellipse_points(
 
   std::vector<foxglove::messages::Point3> points;
   points.reserve(kEllipseSegments);
-  // LINE_LOOP closes the ring itself; no repeated last point.
+  // Each ring point is centre + V (k sqrt(lambda) u) for eigenvectors V and
+  // values lambda, k = kEllipseSigma, unit-circle u; LINE_LOOP closes it.
   for (int segment_index = 0; segment_index < kEllipseSegments;
        ++segment_index) {
     const double angle = 2.0 * M_PI * static_cast<double>(segment_index) /
@@ -158,15 +145,11 @@ std::vector<foxglove::messages::Point3> ellipse_points(
   return points;
 }
 
-// Turns a Foxglove channel error into a thrown exception, so each
-// logging call site fails the same way instead of repeating a check.
 void throw_on_error(foxglove::FoxgloveError error, const std::string& action) {
   if (error != foxglove::FoxgloveError::Ok)
     throw std::runtime_error(action + ": " + foxglove::strerror(error));
 }
 
-// Creates a Foxglove message channel on the given topic, throwing
-// with the channel's own error text if creation fails.
 template <typename Channel>
 Channel create_channel(const std::string& topic) {
   foxglove::FoxgloveResult<Channel> result = Channel::create(topic);
@@ -184,8 +167,6 @@ struct RecordingChannels {
   foxglove::messages::SceneUpdateChannel scene;
 };
 
-// Builds the ego-to-world transform logged each frame, in the
-// recording's origin-shifted world frame.
 foxglove::messages::FrameTransform build_frame_transform(
     const foxglove::messages::Timestamp& timestamp,
     const Eigen::Vector3d& ego_translation, double ego_yaw) {
@@ -200,11 +181,9 @@ foxglove::messages::FrameTransform build_frame_transform(
   return frame_transform;
 }
 
-// Bytes per packed point: x, y, z as float32, then rgba as uint32.
+// Bytes per packed point, x, y and z as float32 then rgba as uint32.
 constexpr std::uint32_t kPointStrideBytes = 16;
 
-// Builds one frame's lidar point cloud, packing each point's
-// origin-shifted world position and height-ramp colour into bytes.
 foxglove::messages::PointCloud build_point_cloud(
     const Frame& frame, const foxglove::messages::Timestamp& timestamp,
     const Eigen::Vector3d& origin) {
@@ -242,8 +221,6 @@ foxglove::messages::PointCloud build_point_cloud(
   return point_cloud;
 }
 
-// Builds the ego vehicle's scene entity: a single grey cube at its
-// origin-shifted pose.
 foxglove::messages::SceneEntity build_ego_entity(
     const foxglove::messages::Timestamp& timestamp,
     const Eigen::Vector3d& ego_translation, double ego_yaw) {
@@ -260,8 +237,6 @@ foxglove::messages::SceneEntity build_ego_entity(
   return ego_entity;
 }
 
-// Flattens 2D positions to origin-shifted Point3 at a fixed height,
-// shared by a track's history trail and its predicted path.
 std::vector<foxglove::messages::Point3> flat_path_points(
     const std::vector<Eigen::Vector2d>& positions, double height,
     const Eigen::Vector3d& origin) {
@@ -274,8 +249,6 @@ std::vector<foxglove::messages::Point3> flat_path_points(
   return points;
 }
 
-// Builds a line primitive of the given type and colour from already
-// origin-shifted points; shared by history, prediction and ellipse.
 foxglove::messages::LinePrimitive build_line(
     foxglove::messages::LinePrimitive::LineType type,
     const foxglove::messages::Color& color,
@@ -288,8 +261,6 @@ foxglove::messages::LinePrimitive build_line(
   return line;
 }
 
-// Builds a track's id label, billboarded above the box centre so it
-// always faces the viewer.
 foxglove::messages::TextPrimitive build_label(
     const Track& track, const Eigen::Vector3d& box_center,
     const foxglove::messages::Color& color) {
@@ -304,8 +275,6 @@ foxglove::messages::TextPrimitive build_label(
   return label;
 }
 
-// Builds one track's scene entity: box, history and prediction
-// lines, an optional uncertainty ellipse, and its id label.
 foxglove::messages::SceneEntity build_track_entity(
     const Track& track, const PredictedPath& prediction,
     const foxglove::messages::Timestamp& timestamp,
@@ -352,8 +321,6 @@ foxglove::messages::SceneEntity build_track_entity(
   return track_entity;
 }
 
-// Builds one deletion per track present in the previous frame but
-// absent from this one, so Lichtblick removes its stale entity.
 std::vector<foxglove::messages::SceneEntityDeletion> build_deletions(
     const std::vector<std::uint64_t>& previously_logged_track_ids,
     const std::vector<std::uint64_t>& currently_logged_track_ids,
@@ -374,8 +341,6 @@ std::vector<foxglove::messages::SceneEntityDeletion> build_deletions(
   return deletions;
 }
 
-// Logs one frame's transform, lidar, ego box and each track's box,
-// trail, prediction and ellipse; deletes tracks absent from this one.
 void write_frame(RecordingChannels& channels, const Frame& frame,
                  const std::vector<Track>& tracks,
                  const std::vector<PredictedPath>& predictions,
@@ -415,6 +380,7 @@ void write_frame(RecordingChannels& channels, const Frame& frame,
         build_track_entity(track, predictions[track_index], timestamp, origin));
   }
 
+  // A track absent from this frame is deleted or Lichtblick keeps drawing it.
   scene_update.deletions = build_deletions(
       previously_logged_track_ids, currently_logged_track_ids, timestamp);
   previously_logged_track_ids = std::move(currently_logged_track_ids);
@@ -425,8 +391,6 @@ void write_frame(RecordingChannels& channels, const Frame& frame,
 
 }  // namespace
 
-// Opens the .mcap and its three channels, predicts each track's
-// path and logs all frames. Throws on any Foxglove error.
 void save_replay_recording(
     const std::string& path, const SegmentLog& segment,
     const std::vector<std::vector<Track>>& confirmed_tracks_per_frame,
@@ -447,6 +411,8 @@ void save_replay_recording(
       create_channel<foxglove::messages::FrameTransformChannel>("/tf"),
       create_channel<foxglove::messages::SceneUpdateChannel>("/scene")};
 
+  // Every logged position has frame 0's translation subtracted so it
+  // stays within float precision.
   const Eigen::Vector3d origin = recording_origin(segment);
   std::vector<std::uint64_t> previously_logged_track_ids;
 

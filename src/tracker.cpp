@@ -1,5 +1,5 @@
-// Frame-by-frame track life cycle: predict, match, update, create
-// and delete tracks. Replay reads the confirmed tracks this owns.
+// Runs the frame-by-frame track life cycle of predict, match, update,
+// create and delete. Replay reads the confirmed tracks this owns.
 
 #include "tracker.hpp"
 
@@ -10,7 +10,6 @@ namespace {
 // Trajectory points kept per track, oldest dropped first.
 constexpr std::size_t kHistoryLength = 30;
 
-// Elapsed time between two capture timestamps, in seconds.
 double seconds_between(std::int64_t from_micros, std::int64_t to_micros) {
   return static_cast<double>(to_micros - from_micros) /
          static_cast<double>(kMicrosPerSecond);
@@ -18,14 +17,10 @@ double seconds_between(std::int64_t from_micros, std::int64_t to_micros) {
 
 }  // namespace
 
-// Reserves reserved_tracks slots so step() does not reallocate
-// until more tracks than that are alive at once.
 Tracker::Tracker(TrackerSettings settings) : settings_(settings) {
   tracks_.reserve(settings_.reserved_tracks);
 }
 
-// Converts a box from the vehicle frame into the fixed world frame
-// using the frame's vehicle pose; matching happens in world.
 Box Tracker::to_world(const Box& box, const Eigen::Matrix4d& vehicle_to_world) {
   const Eigen::Vector4d local_position(box.center_x, box.center_y, box.center_z,
                                        1.0);
@@ -34,15 +29,15 @@ Box Tracker::to_world(const Box& box, const Eigen::Matrix4d& vehicle_to_world) {
   world_box.center_x = world_position(0);
   world_box.center_y = world_position(1);
   world_box.center_z = world_position(2);
+  // The vehicle's own yaw is atan2(R10, R00) of the pose's rotation.
   world_box.yaw = wrap_angle(
       box.yaw + std::atan2(vehicle_to_world(1, 0), vehicle_to_world(0, 0)));
   return world_box;
 }
 
-// Advances each track's filter to this frame's capture time. Each
-// track's state_time_micros stops it being predicted twice per frame.
 void Tracker::predict_all_to(std::int64_t capture_time_micros) {
   for (Track& track : tracks_) {
+    // state_time_micros stops a track being predicted twice in one frame.
     if (track.state_time_micros >= capture_time_micros) continue;
     const double dt_seconds =
         seconds_between(track.state_time_micros, capture_time_micros);
@@ -51,8 +46,6 @@ void Tracker::predict_all_to(std::int64_t capture_time_micros) {
   }
 }
 
-// Converts each detection's box into the world frame, keeping
-// detection order so index lists built from it still line up.
 std::vector<Box> Tracker::boxes_in_world(
     const std::vector<Detection>& detections,
     const Eigen::Matrix4d& vehicle_to_world) {
@@ -63,7 +56,6 @@ std::vector<Box> Tracker::boxes_in_world(
   return world_boxes;
 }
 
-// Indices into tracks_ belonging to one object class, in track order.
 std::vector<int> Tracker::track_indices_of(ObjectClass object_class) const {
   std::vector<int> track_indices;
   for (std::size_t index = 0; index < tracks_.size(); ++index)
@@ -72,7 +64,6 @@ std::vector<int> Tracker::track_indices_of(ObjectClass object_class) const {
   return track_indices;
 }
 
-// Indices into detections belonging to one object class, in detection order.
 std::vector<int> Tracker::detection_indices_of(
     const std::vector<Detection>& detections, ObjectClass object_class) {
   std::vector<int> detection_indices;
@@ -82,8 +73,6 @@ std::vector<int> Tracker::detection_indices_of(
   return detection_indices;
 }
 
-// Fills one class's cost matrix with squared Mahalanobis distance
-// between each candidate track and each candidate detection.
 void Tracker::fill_cost(Eigen::MatrixXd& cost,
                         const std::vector<int>& track_indices,
                         const std::vector<int>& detection_indices,
@@ -97,13 +86,11 @@ void Tracker::fill_cost(Eigen::MatrixXd& cost,
           world_boxes[detection_indices[column]], settings_.noise);
 }
 
-// Confirmation threshold shared by matched updates and track creation.
 TrackStatus Tracker::status_for_hits(std::uint32_t hits) const {
   return hits >= settings_.hits_to_confirm ? TrackStatus::Confirmed
                                            : TrackStatus::Tentative;
 }
 
-// Applies one matched detection to its track's filter and history.
 void Tracker::update_matched(Track& track, const Box& world_box) {
   update(track.state, world_box, settings_.noise);
   track.hits += 1;
@@ -115,8 +102,6 @@ void Tracker::update_matched(Track& track, const Box& world_box) {
     track.history.erase(track.history.begin());
 }
 
-// Advances one unmatched track's miss count and reports whether it
-// must be erased this step.
 bool Tracker::register_miss(Track& track) {
   track.consecutive_misses += 1;
   if (track.status == TrackStatus::Tentative) return true;
@@ -124,8 +109,6 @@ bool Tracker::register_miss(Track& track) {
   return track.consecutive_misses >= settings_.misses_to_delete;
 }
 
-// Builds a track for an unmatched detection at this frame's
-// capture time, consuming the next track id.
 Track Tracker::start_track(ObjectClass object_class, const Box& world_box,
                            std::int64_t capture_time_micros) {
   Track new_track;
@@ -142,7 +125,6 @@ Track Tracker::start_track(ObjectClass object_class, const Box& world_box,
   return new_track;
 }
 
-// Removes each track marked for deletion from tracks_ in place.
 void Tracker::erase_marked(std::vector<bool>& marked_for_deletion) {
   // marked_for_deletion mirrors tracks_ by index; erase_cursor keeps
   // the two in step as erase_if visits tracks_ in order.
@@ -153,8 +135,6 @@ void Tracker::erase_marked(std::vector<bool>& marked_for_deletion) {
   });
 }
 
-// Runs one frame's full life cycle: predict, assign detections to
-// tracks per object class, update matches, create and delete tracks.
 void Tracker::step(std::int64_t capture_time_micros,
                    const std::vector<Detection>& detections,
                    const Eigen::Matrix4d& vehicle_to_world) {
@@ -200,14 +180,10 @@ void Tracker::step(std::int64_t capture_time_micros,
   erase_marked(marked_for_deletion);
 }
 
-// All tracks exactly as the last step() call left them, tentative
-// tracks included.
 const std::vector<Track>& Tracker::tracks() const {
   return tracks_;
 }
 
-// Copies of the confirmed and coasting tracks, predicted forward to
-// the given time; this is what gets exported and recorded.
 std::vector<Track> Tracker::confirmed_tracks_at(
     std::int64_t query_time_micros) const {
   std::vector<Track> confirmed_tracks;

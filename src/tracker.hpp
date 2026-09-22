@@ -1,4 +1,5 @@
-// Declares the tracker and the knobs that govern its life cycle.
+// Declares the tracker and the knobs that govern its life cycle. replay.cpp
+// drives it one frame at a time and reads the confirmed tracks back.
 
 #pragma once
 #include <cstdint>
@@ -15,8 +16,8 @@ struct TrackerSettings {
   std::uint32_t hits_to_confirm = 3;
   // Unmatched frames before a confirmed track is dropped. Chosen.
   std::uint32_t misses_to_delete = 5;
-  // Max squared Mahalanobis distance for a match: chi-squared, 3
-  // degrees of freedom, 0.99 quantile. Refuses 1% of true matches.
+  // Max squared Mahalanobis distance for a match, the chi-squared 0.99
+  // quantile at 3 degrees of freedom. A track left unmatched coasts.
   double gate_chi_squared = 11.34;
   // Track slots reserved up front; the list reallocates only if
   // more tracks than this are alive at once. Chosen.
@@ -29,15 +30,11 @@ struct TrackerSettings {
 // by frame which detection belongs to which track. One thread only.
 class Tracker {
  public:
-  // Builds a tracker sized by settings, with its track list pre-reserved.
   explicit Tracker(TrackerSettings settings);
-  // Runs one frame's predict/match/update/create/delete life cycle.
   void step(std::int64_t capture_time_micros,
             const std::vector<Detection>& detections,
             const Eigen::Matrix4d& vehicle_to_world);
-  // All tracks as the last step() call left them, tentative ones included.
   const std::vector<Track>& tracks() const;
-  // Confirmed and coasting tracks predicted forward to query_time_micros.
   std::vector<Track> confirmed_tracks_at(std::int64_t query_time_micros) const;
 
  private:

@@ -12,7 +12,7 @@
 namespace {
 
 // Run sizes are chosen. The band is the 95% interval for the mean of 50
-// NEES values with 5 degrees of freedom: 5 +/- 1.96 * sqrt(2 * 5 / 50).
+// NEES values with 5 degrees of freedom, 5 +/- 1.96 * sqrt(2 * 5 / 50).
 constexpr int kStepCount = 200;
 constexpr int kWarmupSteps = 20;
 constexpr int kRunCount = 50;
@@ -20,8 +20,6 @@ constexpr double kBandLow = 4.12;
 constexpr double kBandHigh = 5.88;
 constexpr double kRequiredFractionInsideBand = 0.90;
 
-// Returns the NEES at each step of one seeded run. Truth is pushed by random
-// accelerations drawn with the sigmas the filter's process noise assumes.
 std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
   std::mt19937_64 generator(seed);
   std::normal_distribution<double> acceleration_draw(
@@ -81,6 +79,7 @@ std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
     truth_vector << truth.x, truth.y, truth.yaw, truth.speed, truth.yaw_rate;
     Eigen::Matrix<double, 5, 1> error = state.mean - truth_vector;
     error(kYawIndex) = wrap_angle(error(kYawIndex));
+    // NEES is e^T P^-1 e for error e and filter covariance P.
     nees_per_step[step - 1] =
         error.transpose() * state.covariance.ldlt().solve(error);
   }
@@ -90,8 +89,8 @@ std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
 
 }  // namespace
 
-// Averages NEES over kRunCount seeds per step; the required fraction of the
-// steps after warm-up must land inside the band.
+// Averages NEES over kRunCount seeds per step, truth driven by random
+// accelerations at the filter's own sigmas; most steps must sit in the band.
 TEST_CASE("filter NEES stays inside the chi-square band") {
   std::vector<double> step_sum(kStepCount, 0.0);
   for (std::uint64_t seed = 1; seed <= kRunCount; ++seed) {

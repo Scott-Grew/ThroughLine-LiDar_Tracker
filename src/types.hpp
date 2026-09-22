@@ -1,5 +1,5 @@
-// Shared data shapes used across the pipeline: detections, ground
-// truth, frames, filter state and tracks. Each module includes it.
+// Shared data shapes for detections, ground truth, frames, filter
+// state and tracks. Each module includes it.
 
 #pragma once
 #include <cstdint>
@@ -17,8 +17,8 @@ enum class ObjectClass : std::uint8_t {
   Cyclist = 4
 };
 
-// A 3D oriented box: center, extents and yaw. The frame it is
-// expressed in depends on which struct holds it.
+// A 3D oriented box with center, extents and yaw. Detection and
+// GroundTruthBox hold it in the vehicle frame, tracks in the world frame.
 struct Box {
   double center_x, center_y, center_z;
   double length, width, height;
@@ -45,8 +45,8 @@ struct Point {
   float x, y, z;
 };
 
-// One frame of the log: capture time, the vehicle's pose in world,
-// its lidar points and the ground-truth boxes visible in it.
+// One frame of the log with its capture time, the vehicle's pose in the
+// world frame, its lidar points and the ground-truth boxes visible in it.
 struct Frame {
   std::int64_t capture_time_micros;
   Eigen::Matrix4d vehicle_to_world;
@@ -62,19 +62,19 @@ constexpr int kYawIndex = 2;
 constexpr int kSpeedIndex = 3;
 constexpr int kYawRateIndex = 4;
 
-// Filter mean and covariance over x, y, yaw, speed and yaw rate in
-// the world frame (m, rad, m/s, rad/s), plus smoothed box size.
+// Filter mean and covariance over x, y, yaw, speed and yaw rate in the
+// world frame, in m, rad, m/s and rad/s, plus the smoothed box size.
 struct TrackState {
   Eigen::Matrix<double, 5, 1> mean;
   Eigen::Matrix<double, 5, 5> covariance;
   double center_z, length, width, height;
 };
 
-// A track's life-cycle stage: tentative, confirmed or coasting.
+// A track is tentative, confirmed or coasting.
 enum class TrackStatus : std::uint8_t { Tentative, Confirmed, Coasting };
 
-// One tracked object: identity, class, life-cycle state, current
-// filter state and its recent position history for drawing.
+// One tracked object with its identity, class, life-cycle state, current
+// filter state and recent position history for drawing.
 struct Track {
   std::uint64_t track_id;
   ObjectClass object_class;

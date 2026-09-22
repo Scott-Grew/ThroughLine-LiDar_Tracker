@@ -44,7 +44,6 @@ MAX_POINT_RATIO = 1.5
 
 
 def wrap_angle(radians):
-    """Wraps an angle in radians into [-pi, pi]."""
     return float(np.angle(np.exp(1j * radians)))
 
 
@@ -79,8 +78,8 @@ def read_calibration(parquet_root, segment_name, laser):
 
 
 def read_points_by_frame(parquet_root, segment_name, laser, calibration):
-    """Returns points_by_frame: a dict mapping frame timestamp in
-    microseconds to that frame's (N, 3) float32 vehicle-frame points."""
+    """Returns a dict mapping frame timestamp in microseconds to that frame's
+    (N, 3) float32 vehicle-frame points."""
     lidar_table = pq.read_table(f"{parquet_root}/lidar/{segment_name}.parquet")
 
     columns = [lidar_table.column(name).to_pylist() for name in LIDAR_COLUMNS]
@@ -100,8 +99,8 @@ def read_points_by_frame(parquet_root, segment_name, laser, calibration):
 
 
 def read_ground_truth_by_frame(parquet_root, segment_name):
-    """Returns ground_truth_by_frame: a dict mapping frame timestamp
-    in microseconds to a list of GroundTruthBox for that frame."""
+    """Returns a dict mapping frame timestamp in microseconds to that frame's
+    list of GroundTruthBox."""
     ground_truth_by_frame = {}
     for ground_truth_box in read_ground_truth_boxes(parquet_root, segment_name):
         if ground_truth_box.object_class not in TRACKED_OBJECT_CLASSES:
@@ -112,8 +111,8 @@ def read_ground_truth_by_frame(parquet_root, segment_name):
 
 
 def read_pose_by_frame(parquet_root, segment_name):
-    """Returns pose_by_frame: a dict mapping frame timestamp in
-    microseconds to a flattened 16-element world-from-vehicle transform."""
+    """Returns a dict mapping frame timestamp in microseconds to a flattened
+    16-element world-from-vehicle transform."""
     pose_table = pq.read_table(
         f"{parquet_root}/vehicle_pose/{segment_name}.parquet")
     columns = [pose_table.column(name).to_pylist() for name in POSE_COLUMNS]
@@ -123,8 +122,8 @@ def read_pose_by_frame(parquet_root, segment_name):
 def read_components(parquet_root, segment_name, laser):
     """Returns the segment's frames in time order, for one laser.
 
-    Each frame is a dict: capture_time_micros, vehicle_to_world as a (4, 4)
-    float64 array, points as (N, 3) float32 vehicle-frame metres, and
+    Each frame is a dict holding capture_time_micros, vehicle_to_world as a
+    (4, 4) float64 array, points as (N, 3) float32 vehicle-frame metres, and
     ground_truth as a list of GroundTruthBox. Frames without a pose are
     skipped.
     """
@@ -177,8 +176,8 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
     extrinsic = calibration["extrinsic"]
     azimuth_correction = np.arctan2(extrinsic[1, 0], extrinsic[0, 0])
     column_indices = np.arange(width)
-    # Azimuth convention here is easy to get backwards; check_point_ratio
-    # exists to catch it.
+    # Column c sits at azimuth pi - (c + 0.5) * 2 pi / width in the sensor
+    # frame, less the extrinsic's own yaw.
     azimuths = (np.pi - (column_indices + 0.5) * 2.0 * np.pi / width -
                 azimuth_correction)
 
@@ -191,6 +190,8 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
     return_inclinations = inclination_grid[has_return]
     return_azimuths = azimuth_grid[has_return]
 
+    # Spherical to Cartesian, x = r cos(incl) cos(az), y = r cos(incl) sin(az),
+    # z = r sin(incl), then the extrinsic maps sensor frame to vehicle frame.
     sensor_x = (ranges * np.cos(return_inclinations) * np.cos(return_azimuths))
     sensor_y = (ranges * np.cos(return_inclinations) * np.sin(return_azimuths))
     sensor_z = ranges * np.sin(return_inclinations)
@@ -208,6 +209,8 @@ def range_image_to_points(range_image_values, range_image_shape, calibration):
 def count_points_in_box(points, box):
     """Counts the (N, 3) vehicle-frame points inside one Box's footprint
     and height range; the box is in the same frame as the points."""
+    # Rotating each point by -yaw about the centre puts it in the box's own
+    # frame, where the footprint test is an axis-aligned bound.
     cosine = np.cos(-box.yaw)
     sine = np.sin(-box.yaw)
     relative_x = points[:, 0] - box.center_x
@@ -241,7 +244,7 @@ def constant_velocity_residuals(trajectory):
         if (current_frame - previous_frame != 1 or
                 next_frame - current_frame != 1):
             continue
-        # constant-velocity prediction: 2 * current - previous
+        # Under constant velocity the next position is 2 * current - previous.
         position_residuals.append(next_x - (2.0 * current_x - previous_x))
         position_residuals.append(next_y - (2.0 * current_y - previous_y))
         yaw_residuals.append(
@@ -336,8 +339,6 @@ def check_point_ratio(first_frame):
 
 
 def main():
-    """Stages one segment: reads it, checks the first frame's point ratio,
-    measures the jitter sigmas and writes the log."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required = True)
     parser.add_argument("--segment", dest = "segment_name", required = True)

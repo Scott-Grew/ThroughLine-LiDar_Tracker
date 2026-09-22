@@ -11,12 +11,11 @@
 #include "tracker.hpp"
 
 namespace {
-// Calls to operator new since the test binary started.
 std::size_t g_allocation_count = 0;
 }  // namespace
 
-// Counting replacement for global operator new; it applies to the whole
-// test binary, not only this file.
+// Replacing global operator new here counts allocations for the whole test
+// binary, not only this file.
 void* operator new(std::size_t size) {
   ++g_allocation_count;
   void* pointer = std::malloc(size);
@@ -24,12 +23,10 @@ void* operator new(std::size_t size) {
   return pointer;
 }
 
-// Frees memory from the counting operator new, which uses malloc.
 void operator delete(void* pointer) noexcept {
   std::free(pointer);
 }
 
-// Sized form of the delete above.
 void operator delete(void* pointer, std::size_t) noexcept {
   std::free(pointer);
 }

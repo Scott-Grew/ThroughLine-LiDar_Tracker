@@ -10,8 +10,6 @@
 
 namespace {
 
-// True when both runs hold the same track ids, means and covariances in
-// each frame, compared exactly.
 bool tracks_identical(const std::vector<std::vector<Track>>& first,
                       const std::vector<std::vector<Track>>& second) {
   if (first.size() != second.size()) return false;
@@ -30,8 +28,6 @@ bool tracks_identical(const std::vector<std::vector<Track>>& first,
   return true;
 }
 
-// Replays the segment at the given dropout and seed and returns the
-// confirmed tracks per frame.
 std::vector<std::vector<Track>> run_replay(const SegmentLog& segment,
                                            double dropout, std::uint64_t seed) {
   ReplaySettings settings;

@@ -1,5 +1,5 @@
-// Command-line entry point: turns flags into settings and replays a
-// segment. Waymo's evaluator scores the export; nothing here does.
+// Turns the command-line flags into settings, replays a segment, then
+// writes the CSV export and the .mcap recording when asked for.
 
 #include <iostream>
 #include <stdexcept>
@@ -20,8 +20,6 @@ namespace {
 constexpr double kPredictionHorizonSeconds = 3.0;
 constexpr double kPredictionStepSeconds = 0.1;
 
-// Prints step p50 and p99 in milliseconds, the overrun count and
-// the frame count to stdout.
 void print_summary(const TimingStats& timing) {
   std::cout << "step_p50_ms " << timing.percentile(0.5) << " step_p99_ms "
             << timing.percentile(0.99) << " overruns " << timing.overruns
@@ -30,8 +28,6 @@ void print_summary(const TimingStats& timing) {
 
 }  // namespace
 
-// Parses flags, replays the segment, then writes the export and
-// recording if asked. Throws on failure; main reports it.
 int run(int argument_count, char** arguments) {
   CLI::App app{"Waymo multi-object tracker"};
   std::string segment_path;
@@ -90,8 +86,6 @@ int run(int argument_count, char** arguments) {
   return 0;
 }
 
-// Turns anything the run raises into a message on the error stream
-// and a non-zero exit code.
 int main(int argument_count, char** arguments) {
   try {
     return run(argument_count, arguments);
@@ -100,25 +94,3 @@ int main(int argument_count, char** arguments) {
     return 1;
   }
 }
-
-// clang-format off
-// Data flow of one run.
-//
-//   stage/stage_segment.py          Waymo parquet -> .trklog
-//            |
-//            v
-//   read_segment_log                SegmentLog: frames of pose, points, boxes
-//            |
-//            v
-//   Replay::run, for each frame:
-//     ground truth boxes            vehicle frame, at least one lidar point
-//       -> Perturbation::apply      dropout, position noise
-//       -> queue until arrival      latency
-//       -> Tracker::step            boxes to world frame, predict, assign per
-//                                   class, update, create, delete
-//       -> confirmed_tracks_at      confirmed tracks at the frame's time
-//            |
-//            +--> export_tracks           CSV, back in each frame's vehicle frame
-//            |      -> eval/run_official.sh     Waymo's evaluator
-//            +--> save_replay_recording   .mcap topics /tf, /points, /scene
-// clang-format on

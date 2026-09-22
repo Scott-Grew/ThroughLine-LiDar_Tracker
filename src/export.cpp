@@ -8,8 +8,6 @@
 #include <stdexcept>
 #include "filter.hpp"
 
-// Writes one row per confirmed track per frame, converting each
-// track from the world frame back into that frame's vehicle frame.
 void export_tracks(
     const std::string& path, const SegmentLog& segment,
     const std::vector<std::vector<Track>>& confirmed_tracks_per_frame) {
@@ -22,6 +20,8 @@ void export_tracks(
        frame_index < confirmed_tracks_per_frame.size(); ++frame_index) {
     const Frame& frame = segment.frames[frame_index];
     const Eigen::Matrix4d vehicle_from_world = frame.vehicle_to_world.inverse();
+    // The vehicle's own yaw is atan2(R10, R00) of the pose's rotation, and a
+    // track's vehicle-frame yaw is its world yaw minus that.
     const double ego_yaw =
         std::atan2(frame.vehicle_to_world(1, 0), frame.vehicle_to_world(0, 0));
 
@@ -31,7 +31,6 @@ void export_tracks(
                                            track.state.center_z, 1.0);
       const Eigen::Vector4d vehicle_position =
           vehicle_from_world * world_position;
-      // Rotates the track's world yaw into this frame's vehicle frame yaw.
       const double yaw_in_vehicle_frame =
           wrap_angle(track.state.mean(kYawIndex) - ego_yaw);
 

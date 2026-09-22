@@ -58,8 +58,8 @@ add_library(tracker_core
 target_include_directories(tracker_core PUBLIC src)
 target_link_libraries(tracker_core PUBLIC Eigen3::Eigen dlib_headers)
 
-# Foxglove SDK 0.27.0 for x86_64 macOS: a prebuilt C library plus C++ wrapper
-# sources with their own package config, so it is populated and then found.
+# Foxglove SDK 0.27.0 for x86_64 macOS is a prebuilt C library plus C++
+# wrapper sources with their own package config, populated and then found.
 FetchContent_Declare(
   foxglove_sdk
   URL "https://github.com/foxglove/foxglove-sdk/releases/download/\

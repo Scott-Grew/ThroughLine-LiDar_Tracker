@@ -12,15 +12,11 @@ namespace {
 // older layout is refused instead of silently misread.
 constexpr char kMagic[8] = {'T', 'R', 'K', 'L', 'O', 'G', '0', '3'};
 
-// Writes one fixed-size value as its raw bytes; each scalar field
-// in the format goes through this.
 template <typename Value>
 void write_value(std::ofstream& stream, const Value& value) {
   stream.write(reinterpret_cast<const char*>(&value), sizeof(Value));
 }
 
-// Reads one value's raw bytes back; throws on a truncated stream
-// instead of returning a silently half-read struct.
 template <typename Value>
 Value read_value(std::ifstream& stream) {
   Value value;
@@ -31,8 +27,6 @@ Value read_value(std::ifstream& stream) {
   return value;
 }
 
-// Writes the seven numbers a Box carries, in the fixed order read_box
-// below expects back.
 void write_box(std::ofstream& stream, const Box& box) {
   write_value(stream, box.center_x);
   write_value(stream, box.center_y);
@@ -43,7 +37,6 @@ void write_box(std::ofstream& stream, const Box& box) {
   write_value(stream, box.yaw);
 }
 
-// Reads a Box back in the same order write_box wrote it.
 Box read_box(std::ifstream& stream) {
   Box box;
   box.center_x = read_value<double>(stream);
@@ -58,8 +51,6 @@ Box read_box(std::ifstream& stream) {
 
 }  // namespace
 
-// Writes the magic and header, then each frame's pose, points and
-// boxes in host byte order; the stager writes little-endian.
 void write_segment_log(const std::string& path, const SegmentLog& segment) {
   std::ofstream stream(path, std::ios::binary);
   if (!stream) throw std::runtime_error("cannot open " + path);
@@ -88,8 +79,6 @@ void write_segment_log(const std::string& path, const SegmentLog& segment) {
   }
 }
 
-// Reads a whole segment back, refusing anything whose magic does
-// not match, so a log staged under an older layout fails loudly.
 SegmentLog read_segment_log(const std::string& path) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream) throw std::runtime_error("cannot open " + path);
@@ -131,8 +120,8 @@ SegmentLog read_segment_log(const std::string& path) {
 }
 
 // clang-format off
-// Staged log layout: little-endian, no padding, sizes in bytes. Counts on the
-// right are from segment 10203656353524179475, staged for laser 1.
+// Staged log layout, little-endian with no padding and sizes in bytes. The
+// counts on the right are from segment 10203656353524179475, laser 1.
 //
 //   header  magic "TRKLOG03"    chars     8
 //           frame_count         uint32    4     198
@@ -144,12 +133,12 @@ SegmentLog read_segment_log(const std::string& path) {
 //   frame   capture_time        int64     8     microseconds
 //           vehicle_to_world    float64   128   4x4, row by row
 //           point_count         uint32    4     about 113,000
-//           points              float32   12 per point: x, y, z, vehicle frame
+//           points              float32   12 per point, x, y, z, vehicle frame
 //           box_count           uint32    4     8 to 33
 //
 //   box     object_id           uint64    8
 //           object_class        uint8     1     1, 2 or 4
-//           box                 float64   56    centre x y z, length, width,
-//                                               height in metres, yaw in radians
+//           box                 float64   56    centre x y z, length, width
+//                                               and height in m, yaw in rad
 //           lidar_points_in_box int32     4
 // clang-format on

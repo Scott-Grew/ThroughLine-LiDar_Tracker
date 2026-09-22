@@ -1,4 +1,4 @@
-// Test-only helpers: a simulated constant turn rate object and a seeded
+// Test-only helpers, a simulated constant turn rate object and a seeded
 // synthetic segment, shared by the test files.
 
 #pragma once
@@ -9,8 +9,8 @@
 #include "filter.hpp"
 #include "log.hpp"
 
-// Values shared by the tests: filter noise, the simulated vehicle's box in
-// metres, and the 10 Hz frame period in both of the units the code uses.
+// Values shared by the tests, the filter noise, the simulated vehicle's box
+// in metres, and the 10 Hz frame period in both units the code uses.
 inline constexpr FilterNoise kTestNoise{2.0, 0.5, 0.1, 0.02};
 inline constexpr double kTestVehicleLength = 4.5;
 inline constexpr double kTestVehicleWidth = 2.0;
@@ -18,20 +18,20 @@ inline constexpr double kTestVehicleHeight = 1.6;
 inline constexpr double kTestStepSeconds = 0.1;
 inline constexpr std::int64_t kTestFramePeriodMicros = 100'000;
 
-// A simulated object's motion in the world frame: x, y in metres, yaw in
-// radians, speed in m/s and yaw_rate in rad/s.
+// A simulated object's motion in the world frame. x and y are metres, yaw
+// radians, speed m/s and yaw_rate rad/s.
 struct TruthMotion {
   double x, y, yaw, speed, yaw_rate;
 };
 
-// Advances motion by step_seconds along a constant turn rate path, the same
-// noise-free model the filter predicts with. Does not wrap yaw.
 inline void advance_constant_turn_rate(TruthMotion& motion,
                                        double step_seconds) {
   if (std::abs(motion.yaw_rate) < kStraightLineYawRate) {
     motion.x += motion.speed * std::cos(motion.yaw) * step_seconds;
     motion.y += motion.speed * std::sin(motion.yaw) * step_seconds;
   } else {
+    // Constant turn rate path with radius r = speed / yaw_rate moves x by
+    // r * (sin(yaw_next) - sin(yaw)) and y by r * (cos(yaw) - cos(yaw_next)).
     const double yaw_next = motion.yaw + motion.yaw_rate * step_seconds;
     const double radius = motion.speed / motion.yaw_rate;
     motion.x += radius * (std::sin(yaw_next) - std::sin(motion.yaw));
@@ -40,8 +40,6 @@ inline void advance_constant_turn_rate(TruthMotion& motion,
   }
 }
 
-// Builds a seeded segment of vehicles on constant turn rate paths, so tests
-// need no Waymo data and two builds from one seed are identical.
 inline SegmentLog make_synthetic_segment(int frame_count, int object_count,
                                          std::uint64_t seed) {
   std::mt19937_64 generator(seed);

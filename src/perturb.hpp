@@ -1,5 +1,5 @@
 // Declares the sensor-fault model applied between ground truth and
-// the tracker: dropout, position noise, and arrival latency.
+// the tracker, which adds dropout, position noise and arrival latency.
 
 #pragma once
 #include <cstdint>
@@ -7,8 +7,8 @@
 #include <vector>
 #include "types.hpp"
 
-// Fault rates for one run: drop probability, position noise sigma in
-// metres, and arrival delay in microseconds.
+// Fault rates for one run. The position noise sigma is in metres and
+// the arrival delay in microseconds.
 struct PerturbationSettings {
   double dropout_probability = 0.0;
   double position_noise_metres = 0.0;
@@ -19,11 +19,8 @@ struct PerturbationSettings {
 // reports when a detection captured earlier actually arrives.
 class Perturbation {
  public:
-  // Builds a Perturbation seeded so its faults are reproducible.
   Perturbation(PerturbationSettings settings, std::uint64_t seed);
-  // Detections that survive dropout, with position noise applied.
   std::vector<Detection> apply(const std::vector<Detection>& detections);
-  // Time the detection captured at capture_time_micros reaches the tracker.
   std::int64_t available_time(std::int64_t capture_time_micros) const;
 
  private:

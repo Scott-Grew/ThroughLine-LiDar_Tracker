@@ -17,8 +17,6 @@ constexpr double kInitialYawRateSigma = 1.0;
 // smoothed, not estimated like position and speed.
 constexpr double kSizeSmoothing = 0.3;
 
-// Maps the five-number state to the three the sensor measures:
-// position and yaw, never speed or turn rate.
 Eigen::Matrix<double, 3, 5> build_measurement_jacobian() {
   Eigen::Matrix<double, 3, 5> jacobian = Eigen::Matrix<double, 3, 5>::Zero();
   jacobian(kPositionXIndex, kPositionXIndex) = 1.0;
@@ -27,8 +25,6 @@ Eigen::Matrix<double, 3, 5> build_measurement_jacobian() {
   return jacobian;
 }
 
-// Measurement noise covariance from the sigmas the staging script
-// measured for this segment.
 Eigen::Matrix3d build_measurement_noise(const FilterNoise& noise) {
   Eigen::Matrix3d noise_covariance = Eigen::Matrix3d::Zero();
   noise_covariance(kPositionXIndex, kPositionXIndex) =
@@ -42,14 +38,10 @@ Eigen::Matrix3d build_measurement_noise(const FilterNoise& noise) {
 
 }  // namespace
 
-// Wraps an angle into [-pi, pi]. Each yaw difference in this
-// file must be wrapped, or a near-identical yaw reads as huge.
 double wrap_angle(double radians) {
   return std::remainder(radians, 2.0 * M_PI);
 }
 
-// Builds a track's starting state from its first box, with speed and
-// yaw rate at zero. Throws if either measurement sigma is <= 0.
 TrackState initial_state(const Box& box, const FilterNoise& noise) {
   if (noise.sigma_measurement_position <= 0.0 ||
       noise.sigma_measurement_yaw <= 0.0)
@@ -76,8 +68,6 @@ TrackState initial_state(const Box& box, const FilterNoise& noise) {
   return state;
 }
 
-// Advances the state by dt_seconds without a measurement, widening
-// covariance by process noise coupled through the current yaw.
 void predict(TrackState& state, double dt_seconds, const FilterNoise& noise) {
   const double yaw = state.mean(kYawIndex);
   const double speed = state.mean(kSpeedIndex);
@@ -95,12 +85,16 @@ void predict(TrackState& state, double dt_seconds, const FilterNoise& noise) {
         speed * std::cos(yaw) * dt_seconds;
     motion_jacobian(kPositionYIndex, kSpeedIndex) = std::sin(yaw) * dt_seconds;
   } else {
+    // Constant turn rate path with radius r = speed / yaw_rate moves x by
+    // r * (sin(yaw_next) - sin(yaw)) and y by r * (cos(yaw) - cos(yaw_next)).
     const double yaw_next = yaw + yaw_rate * dt_seconds;
     const double radius = speed / yaw_rate;
     state.mean(kPositionXIndex) +=
         radius * (std::sin(yaw_next) - std::sin(yaw));
     state.mean(kPositionYIndex) +=
         radius * (std::cos(yaw) - std::cos(yaw_next));
+    // The Jacobian entries are the partial derivatives of those two moves
+    // with respect to yaw, speed and yaw rate.
     motion_jacobian(kPositionXIndex, kYawIndex) =
         radius * (std::cos(yaw_next) - std::cos(yaw));
     motion_jacobian(kPositionXIndex, kSpeedIndex) =
@@ -122,6 +116,8 @@ void predict(TrackState& state, double dt_seconds, const FilterNoise& noise) {
 
   const double half_dt_squared = 0.5 * dt_seconds * dt_seconds;
 
+  // Process noise is Q = sa^2 g g^T + sy^2 h h^T with g = (dt^2/2 cos yaw,
+  // dt^2/2 sin yaw, 0, dt, 0) and h = (0, 0, dt^2/2, 0, dt).
   Eigen::Matrix<double, 5, 1> acceleration_direction =
       Eigen::Matrix<double, 5, 1>::Zero();
   acceleration_direction(kPositionXIndex) = half_dt_squared * std::cos(yaw);
@@ -139,13 +135,12 @@ void predict(TrackState& state, double dt_seconds, const FilterNoise& noise) {
       noise.sigma_yaw_acceleration * noise.sigma_yaw_acceleration *
           yaw_acceleration_direction * yaw_acceleration_direction.transpose();
 
+  // P = F P F^T + Q for motion Jacobian F.
   state.covariance =
       motion_jacobian * state.covariance * motion_jacobian.transpose() +
       process_noise;
 }
 
-// Difference between a measured box and the predicted state, with
-// the yaw difference wrapped to its shortest direction.
 Eigen::Vector3d compute_innovation(const TrackState& state,
                                    const Box& measurement) {
   Eigen::Vector3d innovation;
@@ -157,30 +152,26 @@ Eigen::Vector3d compute_innovation(const TrackState& state,
   return innovation;
 }
 
-// Expected spread of the innovation, combining the state's own
-// uncertainty with how much the sensor itself jitters.
 Eigen::Matrix3d compute_innovation_covariance(const TrackState& state,
                                               const FilterNoise& noise) {
   const Eigen::Matrix<double, 3, 5> measurement_jacobian =
       build_measurement_jacobian();
+  // S = H P H^T + R for measurement Jacobian H and sensor noise R.
   return measurement_jacobian * state.covariance *
              measurement_jacobian.transpose() +
          build_measurement_noise(noise);
 }
 
-// Squared innovation distance in standard deviations, unitless;
-// the tracker uses it as the match cost and gates on it.
 double mahalanobis_squared(const TrackState& state, const Box& measurement,
                            const FilterNoise& noise) {
   const Eigen::Vector3d innovation = compute_innovation(state, measurement);
   const Eigen::Matrix3d innovation_covariance =
       compute_innovation_covariance(state, noise);
+  // d^2 = y^T S^-1 y for innovation y, solved rather than inverted.
   return innovation.transpose() *
          innovation_covariance.ldlt().solve(innovation);
 }
 
-// Folds a matched box into the state via the Kalman gain, using the
-// numerically stable Joseph form for the covariance update.
 void update(TrackState& state, const Box& measurement,
             const FilterNoise& noise) {
   const Eigen::Matrix<double, 3, 5> measurement_jacobian =
@@ -188,6 +179,7 @@ void update(TrackState& state, const Box& measurement,
   const Eigen::Vector3d innovation = compute_innovation(state, measurement);
   const Eigen::Matrix3d innovation_covariance =
       compute_innovation_covariance(state, noise);
+  // K = P H^T S^-1.
   const Eigen::Matrix<double, 5, 3> kalman_gain =
       state.covariance * measurement_jacobian.transpose() *
       innovation_covariance.inverse();
@@ -195,6 +187,8 @@ void update(TrackState& state, const Box& measurement,
   state.mean += kalman_gain * innovation;
   state.mean(kYawIndex) = wrap_angle(state.mean(kYawIndex));
 
+  // Joseph form P = (I - K H) P (I - K H)^T + K R K^T keeps the covariance
+  // symmetric and positive definite.
   const Eigen::Matrix<double, 5, 5> joseph_factor =
       Eigen::Matrix<double, 5, 5>::Identity() -
       kalman_gain * measurement_jacobian;
