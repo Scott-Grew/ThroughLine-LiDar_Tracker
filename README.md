@@ -9,6 +9,11 @@ ID on a car even when the detector loses it for a few scans. It works out how fa
 object is going and which way it is turning, and it draws where it expects the object to
 be three seconds from now. The whole scene streams to a viewer while it runs.
 
+![Tracking through a turn](docs/media/turn.gif)
+
+*Blue boxes are tracked cars. The line in front of each one is where the tracker thinks it is
+going.*
+
 ## Results
 
 The input boxes come from CasA, a published LiDAR detector, using the detection files its
