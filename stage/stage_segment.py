@@ -1,384 +1,306 @@
-"""Stages one Waymo v2 parquet segment as the binary log the C++ tracker reads.
-
-Only this file and src/log.cpp know the byte layout; change them together.
-"""
+"""Stages one Waymo v2 segment as an MCAP log for the C++ tracker, with lidar
+points from the parquet tables and boxes from CasA's published detections."""
 
 import argparse
-import struct
-from typing import NamedTuple, Optional
+import pickle
 
 import numpy as np
 import pyarrow.parquet as pq
+import tracker_pb2
+from mcap_protobuf.writer import Writer
+from waymo_boxes import TRACKED_OBJECT_CLASSES, read_ground_truth_boxes
 
-from waymo_boxes import (read_ground_truth_boxes, stable_object_id,
-                         TRACKED_OBJECT_CLASSES)
+# CasA's class names mapped to Waymo's type codes, and the score below
+# which its detections are dropped. Chosen.
+CLASS_CODES = {"Vehicle": 1, "Pedestrian": 2, "Cyclist": 4}
+MIN_SCORE = 0.5
 
-# File tag at the start of a staged log; must equal kMagic in src/log.cpp.
-MAGIC = b"TRKLOG03"
+# The only classes a CasA result pickle may build, so loading it runs no code.
+NUMPY_CLASSES = {
+    ("numpy", "dtype"),
+    ("numpy", "ndarray"),
+    ("numpy.core.multiarray", "_reconstruct"),
+    ("numpy.core.multiarray", "scalar"),
+    ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy._core.multiarray", "scalar"),
+}
 
-# lidar_calibration columns, in read_calibration's loop unpacking order.
-CALIBRATION_COLUMNS = (
-    "key.laser_name",
-    "[LiDARCalibrationComponent].extrinsic.transform",
-    "[LiDARCalibrationComponent].beam_inclination.min",
-    "[LiDARCalibrationComponent].beam_inclination.max",
-    "[LiDARCalibrationComponent].beam_inclination.values",
-)
-
-# lidar columns, in read_points_by_frame's loop unpacking order.
-LIDAR_COLUMNS = (
-    "key.frame_timestamp_micros",
-    "key.laser_name",
-    "[LiDARComponent].range_image_return1.values",
-    "[LiDARComponent].range_image_return1.shape",
-)
-
-# vehicle_pose columns, in read_pose_by_frame's zip unpacking order.
-POSE_COLUMNS = (
-    "key.frame_timestamp_micros",
-    "[VehiclePoseComponent].world_from_vehicle.transform",
-)
-
-
-class LaserCalibration(NamedTuple):
-    """One laser's calibration, its sensor-to-vehicle transform and the beam
-    inclinations in radians, listed per row when Waymo gives them."""
-    extrinsic: np.ndarray  # (4, 4) float64
-    inclination_min: float
-    inclination_max: float
-    inclination_values: Optional[np.ndarray]  # (rows,) or None
-
-
-class StagedFrame(NamedTuple):
-    """One frame ready to write to the staged log."""
-    capture_time_micros: int
-    vehicle_to_world: np.ndarray  # (4, 4) float64
-    points: np.ndarray  # (N, 3) float32 vehicle-frame metres
-    ground_truth: list  # GroundTruthBox rows visible in the frame
-
+# Scale from the median absolute deviation to a Gaussian sigma.
+MAD_TO_SIGMA = 1.4826
 
 # Accepted range for staged points in boxes over Waymo's reported count.
 MIN_POINT_RATIO = 0.5
 MAX_POINT_RATIO = 1.5
 
+RANGE_IMAGE = "[LiDARComponent].range_image_return1"
+CALIBRATION = "[LiDARCalibrationComponent]"
+
+
+class NumpyOnlyUnpickler(pickle.Unpickler):
+
+    def find_class(self, module, name):
+        if (module, name) not in NUMPY_CLASSES:
+            raise pickle.UnpicklingError(f"refusing {module}.{name}")
+        return super().find_class(module, name)
+
 
 def wrap_angle(radians):
-    return float(np.angle(np.exp(1j * radians)))
+    return np.angle(np.exp(1j * radians))
+
+
+def read_table(parquet_root, component, segment_name, **options):
+    path = f"{parquet_root}/{component}/{segment_name}.parquet"
+    return pq.read_table(path, **options)
 
 
 def read_calibration(parquet_root, segment_name, laser):
-    """Returns the requested laser's LaserCalibration."""
-    calibration_table = pq.read_table(
-        f"{parquet_root}/lidar_calibration/{segment_name}.parquet")
-
-    columns = [
-        calibration_table.column(name).to_pylist()
-        for name in CALIBRATION_COLUMNS
-    ]
-
-    calibration_by_laser = {}
-    for (
-            laser_name,
-            extrinsic,
-            inclination_min,
-            inclination_max,
-            inclination_values,
-    ) in zip(*columns):
-        calibration_by_laser[laser_name] = LaserCalibration(
-            extrinsic = np.array(extrinsic, dtype = np.float64).reshape(4, 4),
-            inclination_min = inclination_min,
-            inclination_max = inclination_max,
-            inclination_values = (np.array(inclination_values,
-                                           dtype = np.float64)
-                                  if inclination_values else None),
-        )
-    return calibration_by_laser[laser]
+    """Returns the laser's sensor-to-vehicle transform and its beam
+    inclinations as (values or None, min, max)."""
+    table = read_table(parquet_root, "lidar_calibration", segment_name,
+                       filters = [("key.laser_name", "=", laser)])
+    row = table.to_pylist()[0]
+    extrinsic = np.array(row[f"{CALIBRATION}.extrinsic.transform"])
+    values = row[f"{CALIBRATION}.beam_inclination.values"]
+    low = row[f"{CALIBRATION}.beam_inclination.min"]
+    high = row[f"{CALIBRATION}.beam_inclination.max"]
+    return extrinsic.reshape(4, 4), values, low, high
 
 
-def read_points_by_frame(parquet_root, segment_name, laser, calibration):
-    """Returns a dict mapping frame timestamp in microseconds to that frame's
-    (N, 3) float32 vehicle-frame points."""
-    lidar_table = pq.read_table(f"{parquet_root}/lidar/{segment_name}.parquet")
-
-    columns = [lidar_table.column(name).to_pylist() for name in LIDAR_COLUMNS]
-
-    points_by_frame = {}
-    for (
-            capture_time_micros,
-            laser_name,
-            range_image_values,
-            range_image_shape,
-    ) in zip(*columns):
-        if laser_name != laser:
-            continue
-        points_by_frame[capture_time_micros] = range_image_to_points(
-            range_image_values, range_image_shape, calibration)
-    return points_by_frame
-
-
-def read_ground_truth_by_frame(parquet_root, segment_name):
-    """Returns a dict mapping frame timestamp in microseconds to that frame's
-    list of GroundTruthBox."""
-    ground_truth_by_frame = {}
-    for ground_truth_box in read_ground_truth_boxes(parquet_root, segment_name):
-        if ground_truth_box.object_class not in TRACKED_OBJECT_CLASSES:
-            continue
-        ground_truth_by_frame.setdefault(ground_truth_box.capture_time_micros,
-                                         []).append(ground_truth_box)
-    return ground_truth_by_frame
-
-
-def read_pose_by_frame(parquet_root, segment_name):
-    """Returns a dict mapping frame timestamp in microseconds to a flattened
-    16-element world-from-vehicle transform."""
-    pose_table = pq.read_table(
-        f"{parquet_root}/vehicle_pose/{segment_name}.parquet")
-    columns = [pose_table.column(name).to_pylist() for name in POSE_COLUMNS]
-    return dict(zip(*columns))
-
-
-def read_components(parquet_root, segment_name, laser):
-    """Returns the segment's frames in time order, for one laser.
-
-    Frames without a pose are skipped.
-    """
-    calibration = read_calibration(parquet_root, segment_name, laser)
-    points_by_frame = read_points_by_frame(parquet_root, segment_name, laser,
-                                           calibration)
-    ground_truth_by_frame = read_ground_truth_by_frame(parquet_root,
-                                                       segment_name)
-    pose_by_frame = read_pose_by_frame(parquet_root, segment_name)
-
-    frames = []
-    for capture_time_micros in sorted(points_by_frame):
-        if capture_time_micros not in pose_by_frame:
-            continue
-        frames.append(
-            StagedFrame(
-                capture_time_micros = capture_time_micros,
-                vehicle_to_world = np.array(pose_by_frame[capture_time_micros],
-                                            dtype = np.float64).reshape(4, 4),
-                points = points_by_frame[capture_time_micros],
-                ground_truth = ground_truth_by_frame.get(
-                    capture_time_micros, []),
-            ))
-    return frames
-
-
-def range_image_to_points(range_image_values, range_image_shape, calibration):
-    """Converts one laser's range image to (N, 3) float32 vehicle-frame metres.
-
-    range_image_values is the flattened image and range_image_shape its
-    (rows, columns, channels), (64, 2650, 4) for laser 1. Channel 0 is range
-    in metres; cells without a return hold -1 there and are dropped.
-    """
-    height, width, channel_count = range_image_shape
-    range_image = np.array(range_image_values,
-                           dtype = np.float64).reshape(height, width,
-                                                       channel_count)
-    range_channel = range_image[:, :, 0]
-
-    inclination_values = calibration.inclination_values
-    if (inclination_values is not None and len(inclination_values) == height):
-        # Calibration's inclination list runs opposite the image's
-        # row order, hence the reversal.
-        inclinations = inclination_values[::-1]
+def range_image_to_points(range_image, calibration):
+    """Converts one (rows, columns, channels) range image to (N, 3) float32
+    vehicle-frame points; channel 0 is range, and -1 marks no return."""
+    extrinsic, values, low, high = calibration
+    height, width, _ = range_image.shape
+    if values and len(values) == height:
+        inclinations = np.array(values[::-1])
     else:
-        inclinations = np.linspace(
-            calibration.inclination_max,
-            calibration.inclination_min,
-            height,
-        )
-
-    extrinsic = calibration.extrinsic
-    azimuth_correction = np.arctan2(extrinsic[1, 0], extrinsic[0, 0])
-    column_indices = np.arange(width)
-    # Column c sits at azimuth pi - (c + 0.5) * 2 pi / width in the sensor
+        inclinations = np.linspace(high, low, height)
+    # Column c looks along azimuth pi - (c + 0.5) 2 pi / width in the sensor
     # frame, less the extrinsic's own yaw.
-    azimuths = (np.pi - (column_indices + 0.5) * 2.0 * np.pi / width -
-                azimuth_correction)
+    sensor_yaw = np.arctan2(extrinsic[1, 0], extrinsic[0, 0])
+    columns = np.arange(width)
+    azimuths = np.pi - (columns + 0.5) * 2.0 * np.pi / width - sensor_yaw
+    inclination, azimuth = np.meshgrid(inclinations, azimuths, indexing = "ij")
 
-    inclination_grid, azimuth_grid = np.meshgrid(inclinations,
-                                                 azimuths,
-                                                 indexing = "ij")
+    ranges = range_image[:, :, 0]
+    has_return = ranges > 0.0
+    distance = ranges[has_return]
+    elevation = inclination[has_return]
+    heading = azimuth[has_return]
+    # x = r cos(incl) cos(az), y = r cos(incl) sin(az), z = r sin(incl).
+    sensor_points = np.stack([
+        distance * np.cos(elevation) * np.cos(heading),
+        distance * np.cos(elevation) * np.sin(heading),
+        distance * np.sin(elevation),
+        np.ones_like(distance),
+    ])
+    vehicle_points = extrinsic @ sensor_points
+    return vehicle_points[:3].T.astype(np.float32)
 
-    has_return = range_channel > 0.0
-    ranges = range_channel[has_return]
-    return_inclinations = inclination_grid[has_return]
-    return_azimuths = azimuth_grid[has_return]
 
-    # Spherical to Cartesian, x = r cos(incl) cos(az), y = r cos(incl) sin(az),
-    # z = r sin(incl), then the extrinsic maps sensor frame to vehicle frame.
-    sensor_x = (ranges * np.cos(return_inclinations) * np.cos(return_azimuths))
-    sensor_y = (ranges * np.cos(return_inclinations) * np.sin(return_azimuths))
-    sensor_z = ranges * np.sin(return_inclinations)
+def read_points(parquet_root, segment_name, laser):
+    """Returns {capture time in microseconds: (N, 3) vehicle-frame points}."""
+    calibration = read_calibration(parquet_root, segment_name, laser)
+    columns = [
+        "key.frame_timestamp_micros",
+        f"{RANGE_IMAGE}.values",
+        f"{RANGE_IMAGE}.shape",
+    ]
+    table = read_table(parquet_root, "lidar", segment_name, columns = columns,
+                       filters = [("key.laser_name", "=", laser)])
+    times = table.column(columns[0]).to_pylist()
+    points_by_time = {}
+    for row, capture_time in enumerate(times):
+        flat_values = table.column(columns[1])[row].values.to_numpy()
+        shape = table.column(columns[2])[row].as_py()
+        range_image = flat_values.reshape(shape)
+        points = range_image_to_points(range_image, calibration)
+        points_by_time[capture_time] = points
+    return points_by_time
 
-    sensor_points = np.stack(
-        [sensor_x, sensor_y, sensor_z,
-         np.ones_like(sensor_x)], axis = 1)
-    vehicle_points = (extrinsic @ sensor_points.T).T
 
-    points = np.empty((vehicle_points.shape[0], 3), dtype = np.float32)
-    points[:, 0:3] = vehicle_points[:, 0:3]
-    return points
+def read_poses(parquet_root, segment_name):
+    """Returns {capture time in microseconds: 16-element row-major pose}."""
+    columns = [
+        "key.frame_timestamp_micros",
+        "[VehiclePoseComponent].world_from_vehicle.transform",
+    ]
+    table = read_table(parquet_root, "vehicle_pose", segment_name,
+                       columns = columns)
+    times = table.column(columns[0]).to_pylist()
+    poses = table.column(columns[1]).to_pylist()
+    return dict(zip(times, poses, strict = True))
+
+
+def read_detections(result_path, segment_name):
+    """Returns CasA's detections scoring at least MIN_SCORE, in frame order,
+    one (classes, (N, 7) boxes) pair per frame, boxes in the vehicle frame."""
+    with open(result_path, "rb") as stream:
+        results = NumpyOnlyUnpickler(stream).load()
+    sequence = f"segment-{segment_name}_with_camera_labels"
+    segment_results = [r for r in results if str(r["seq_id"]) == sequence]
+    segment_results.sort(key = lambda result: int(result["frame_id"]))
+    detections = []
+    for result in segment_results:
+        kept = result["score"] >= MIN_SCORE
+        names = result["name"][kept]
+        classes = np.array([CLASS_CODES[name] for name in names])
+        boxes = result["boxes_lidar"][kept].astype(np.float64)
+        detections.append((classes, boxes))
+    return detections
+
+
+def scored_labels(ground_truth):
+    """Returns {capture time in microseconds: (classes, (N, 7) boxes)} for the
+    tracked labels with lidar support, the boxes the evaluator scores."""
+    rows_by_time = {}
+    for label in ground_truth:
+        if label.object_class not in TRACKED_OBJECT_CLASSES:
+            continue
+        if label.num_lidar_points_in_box <= 0:
+            continue
+        rows = rows_by_time.setdefault(label.capture_time_micros, [])
+        rows.append((label.object_class, *label.box))
+    labels_by_time = {}
+    for capture_time, rows in rows_by_time.items():
+        table = np.array(rows)
+        labels_by_time[capture_time] = (table[:, 0], table[:, 1:])
+    return labels_by_time
+
+
+def matched_errors(detections, labels):
+    """Returns (position errors, yaw errors) of the detections that are the
+    mutual nearest same-class neighbour of a label in one frame."""
+    detection_classes, detection_boxes = detections
+    label_classes, label_boxes = labels
+    if len(detection_boxes) == 0:
+        return np.empty(0), np.empty(0)
+    offsets = detection_boxes[:, None, :2] - label_boxes[None, :, :2]
+    distances = np.linalg.norm(offsets, axis = 2)
+    same_class = detection_classes[:, None] == label_classes[None, :]
+    distances[~same_class] = np.inf
+    nearest_label = np.argmin(distances, axis = 1)
+    nearest_detection = np.argmin(distances, axis = 0)
+    detection_indices = np.arange(len(detection_boxes))
+    mutual = nearest_detection[nearest_label] == detection_indices
+    mutual &= np.isfinite(distances[detection_indices, nearest_label])
+    matched_labels = label_boxes[nearest_label[mutual]]
+    errors = detection_boxes[mutual] - matched_labels
+    yaw_errors = wrap_angle(errors[:, 6])
+    return errors[:, :2].ravel(), yaw_errors
+
+
+def robust_sigma(errors):
+    deviation = np.abs(errors - np.median(errors))
+    return float(MAD_TO_SIGMA * np.median(deviation))
 
 
 def count_points_in_box(points, box):
-    """Counts the (N, 3) vehicle-frame points inside one Box's footprint
-    and height range; the box is in the same frame as the points."""
-    # Rotating each point by -yaw about the centre puts it in the box's own
-    # frame, where the footprint test is an axis-aligned bound.
-    cosine = np.cos(-box.yaw)
-    sine = np.sin(-box.yaw)
+    """Counts the vehicle-frame points inside one box."""
+    # Rotating by -yaw about the centre turns the footprint test into an
+    # axis-aligned bound.
     relative_x = points[:, 0] - box.center_x
     relative_y = points[:, 1] - box.center_y
-    local_x = cosine * relative_x - sine * relative_y
-    local_y = sine * relative_x + cosine * relative_y
-    inside_footprint = (np.abs(local_x) <= box.length /
-                        2.0) & (np.abs(local_y) <= box.width / 2.0)
-    inside_height = (np.abs(points[:, 2] - box.center_z) <= box.height / 2.0)
-    return int(np.count_nonzero(inside_footprint & inside_height))
+    cosine = np.cos(box.yaw)
+    sine = np.sin(box.yaw)
+    local_x = cosine * relative_x + sine * relative_y
+    local_y = cosine * relative_y - sine * relative_x
+    inside = np.abs(local_x) <= box.length / 2
+    inside &= np.abs(local_y) <= box.width / 2
+    inside &= np.abs(points[:, 2] - box.center_z) <= box.height / 2
+    return int(np.count_nonzero(inside))
 
 
-def constant_velocity_residuals(trajectory):
-    """Returns (position_residuals, yaw_residuals) for one object's trajectory.
-
-    trajectory is a list of (frame_index, center_x, center_y, yaw) tuples in
-    frame order. Position residuals are metres, x then y per index; yaw
-    residuals are wrapped radians. Indices next to a frame gap are skipped.
-    """
-    position_residuals = []
-    yaw_residuals = []
-    for index in range(1, len(trajectory) - 1):
-        (
-            previous_frame,
-            previous_x,
-            previous_y,
-            previous_yaw,
-        ) = trajectory[index - 1]
-        current_frame, current_x, current_y, current_yaw = (trajectory[index])
-        next_frame, next_x, next_y, next_yaw = trajectory[index + 1]
-        if (current_frame - previous_frame != 1 or
-                next_frame - current_frame != 1):
+def check_point_ratio(ground_truth, first_time, points):
+    """Warns if the first frame's staged points in the labelled boxes stray
+    from Waymo's own count, the sign of a wrong azimuth convention."""
+    staged = 0
+    reported = 0
+    for label in ground_truth:
+        if label.capture_time_micros != first_time:
             continue
-        # Under constant velocity the next position is 2 * current - previous.
-        position_residuals.append(next_x - (2.0 * current_x - previous_x))
-        position_residuals.append(next_y - (2.0 * current_y - previous_y))
-        yaw_residuals.append(
-            wrap_angle(next_yaw - (2.0 * current_yaw - previous_yaw)))
-    return position_residuals, yaw_residuals
+        if label.object_class not in TRACKED_OBJECT_CLASSES:
+            continue
+        staged += count_points_in_box(points, label.box)
+        reported += label.num_lidar_points_in_box
+    ratio = staged / reported if reported else 0.0
+    print(f"staged/reported point ratio for first frame: {ratio:.4f}")
+    if not MIN_POINT_RATIO <= ratio <= MAX_POINT_RATIO:
+        print("WARNING: point ratio far from 1, check the azimuth convention")
 
 
-def measure_box_jitter(boxes_by_frame):
-    """Returns (position_sigma in metres, yaw_sigma in radians), printing both.
-
-    Each sigma is the standard deviation of how far a box lands from the
-    constant-velocity prediction made from its two earlier frames.
-    boxes_by_frame is a list with one list of GroundTruthBox per frame.
-    """
-    positions_by_object = {}
-    for frame_index, boxes in enumerate(boxes_by_frame):
-        for ground_truth_box in boxes:
-            positions_by_object.setdefault(ground_truth_box.laser_object_id,
-                                           []).append((
-                                               frame_index,
-                                               ground_truth_box.box.center_x,
-                                               ground_truth_box.box.center_y,
-                                               ground_truth_box.box.yaw,
-                                           ))
-
-    position_residuals = []
-    yaw_residuals = []
-    for trajectory in positions_by_object.values():
-        trajectory_position_residuals, trajectory_yaw_residuals = (
-            constant_velocity_residuals(trajectory))
-        position_residuals.extend(trajectory_position_residuals)
-        yaw_residuals.extend(trajectory_yaw_residuals)
-
-    position_sigma = (float(np.std(position_residuals))
-                      if position_residuals else 0.0)
-    yaw_sigma = (float(np.std(yaw_residuals)) if yaw_residuals else 0.0)
-    print(f"measured sigma_measurement_position: {position_sigma:.6f} m")
-    print(f"measured sigma_measurement_yaw: {yaw_sigma:.6f} rad")
+def detector_sigmas(times, detections, labels_by_time):
+    """Returns the detector's robust position and yaw sigma over the segment,
+    from detections matched to labels."""
+    position_errors = []
+    yaw_errors = []
+    for capture_time, frame_detections in zip(times, detections, strict = True):
+        if capture_time not in labels_by_time:
+            continue
+        labels = labels_by_time[capture_time]
+        frame_position, frame_yaw = matched_errors(frame_detections, labels)
+        position_errors.append(frame_position)
+        yaw_errors.append(frame_yaw)
+    position_sigma = robust_sigma(np.concatenate(position_errors))
+    yaw_sigma = robust_sigma(np.concatenate(yaw_errors))
     return position_sigma, yaw_sigma
 
 
-def write_log(path, segment_name, frames, position_sigma, yaw_sigma):
-    """Writes the header and frames in the little-endian byte layout that
-    read_segment_log in src/log.cpp expects; the two must change together."""
-    with open(path, "wb") as stream:
-        stream.write(MAGIC)
-        stream.write(struct.pack("<I", len(frames)))
-        name_bytes = segment_name.encode("utf-8")
-        stream.write(struct.pack("<I", len(name_bytes)))
-        stream.write(name_bytes)
-        stream.write(struct.pack("<2d", position_sigma, yaw_sigma))
-        for frame in frames:
-            stream.write(struct.pack("<q", frame.capture_time_micros))
-            stream.write(
-                struct.pack(
-                    "<16d",
-                    *frame.vehicle_to_world.flatten().tolist(),
-                ))
-            points = frame.points
-            stream.write(struct.pack("<I", len(points)))
-            stream.write(points.astype("<f4").tobytes())
-            ground_truth = frame.ground_truth
-            stream.write(struct.pack("<I", len(ground_truth)))
-            for ground_truth_box in ground_truth:
-                stream.write(
-                    struct.pack(
-                        "<Q",
-                        stable_object_id(ground_truth_box.laser_object_id)))
-                stream.write(struct.pack("<B", ground_truth_box.object_class))
-                stream.write(struct.pack("<7d", *ground_truth_box.box))
-                stream.write(
-                    struct.pack("<i", ground_truth_box.num_lidar_points_in_box))
-
-
-def check_point_ratio(first_frame):
-    """Prints the first frame's staged/reported point ratio, and a warning
-    if it falls outside [MIN_POINT_RATIO, MAX_POINT_RATIO]."""
-    staged_points_in_boxes = sum(
-        count_points_in_box(first_frame.points, ground_truth_box.box)
-        for ground_truth_box in first_frame.ground_truth)
-    reported_points_in_boxes = sum(
-        ground_truth_box.num_lidar_points_in_box
-        for ground_truth_box in first_frame.ground_truth)
-    if reported_points_in_boxes:
-        point_ratio = staged_points_in_boxes / reported_points_in_boxes
-    else:
-        point_ratio = 0.0
-    print(f"staged/reported point ratio for first frame: {point_ratio:.4f}")
-    if not MIN_POINT_RATIO <= point_ratio <= MAX_POINT_RATIO:
-        print("WARNING: point ratio far from 1 - "
-              "the azimuth convention is likely wrong")
+def frame_message(capture_time, pose, points, detections):
+    message = tracker_pb2.Frame(capture_time_micros = capture_time)
+    message.vehicle_to_world.extend(pose)
+    message.points.extend(points.ravel())
+    classes, boxes = detections
+    for object_class, box in zip(classes, boxes, strict = True):
+        detection = message.detections.add(object_class = int(object_class))
+        target = detection.box
+        (target.center_x, target.center_y, target.center_z, target.length,
+         target.width, target.height, target.yaw) = box
+    return message
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet-root", required = True)
     parser.add_argument("--segment", dest = "segment_name", required = True)
+    parser.add_argument("--detections", required = True)
     parser.add_argument("--out", required = True)
     parser.add_argument("--laser", type = int, default = 1)
     arguments = parser.parse_args()
+    parquet_root = arguments.parquet_root
+    segment_name = arguments.segment_name
 
-    frames = read_components(arguments.parquet_root, arguments.segment_name,
-                             arguments.laser)
+    points_by_time = read_points(parquet_root, segment_name, arguments.laser)
+    poses = read_poses(parquet_root, segment_name)
+    times = sorted(time for time in points_by_time if time in poses)
+    detections = read_detections(arguments.detections, segment_name)
+    if len(detections) != len(times):
+        raise SystemExit(f"{len(detections)} detection frames for "
+                         f"{len(times)} lidar frames")
 
-    if frames:
-        check_point_ratio(frames[0])
+    ground_truth = read_ground_truth_boxes(parquet_root, segment_name)
+    check_point_ratio(ground_truth, times[0], points_by_time[times[0]])
+    labels_by_time = scored_labels(ground_truth)
+    position_sigma, yaw_sigma = detector_sigmas(times, detections,
+                                                labels_by_time)
+    print(f"detector sigma: {position_sigma:.4f} m, {yaw_sigma:.4f} rad")
 
-    position_sigma, yaw_sigma = measure_box_jitter(
-        [frame.ground_truth for frame in frames])
-
-    write_log(
-        arguments.out,
-        arguments.segment_name,
-        frames,
-        position_sigma,
-        yaw_sigma,
-    )
+    segment = tracker_pb2.Segment(name = segment_name,
+                                  position_sigma = position_sigma,
+                                  yaw_sigma = yaw_sigma)
+    with Writer(arguments.out) as writer:
+        first_nanoseconds = times[0] * 1000
+        writer.write_message("/segment", segment, log_time = first_nanoseconds,
+                             publish_time = first_nanoseconds)
+        for capture_time, frame_detections in zip(times, detections,
+                                                  strict = True):
+            pose = poses[capture_time]
+            points = points_by_time[capture_time]
+            message = frame_message(capture_time, pose, points,
+                                    frame_detections)
+            nanoseconds = capture_time * 1000
+            writer.write_message("/frames", message, log_time = nanoseconds,
+                                 publish_time = nanoseconds)
 
 
 if __name__ == "__main__":

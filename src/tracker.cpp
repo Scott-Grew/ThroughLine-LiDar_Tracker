@@ -1,206 +1,179 @@
-// Runs the frame-by-frame track life cycle of predict, match, update,
-// create and delete. Replay reads the confirmed tracks this owns.
+// Runs the track life cycle once per frame: predict, match, update, start
+// and delete. main.cpp reads back the confirmed tracks.
 
 #include "tracker.hpp"
 
-#include <cmath>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <utility>
+#include <vector>
+#include <Eigen/Dense>
+#include <dlib/optimization/max_cost_assignment.h>
+#include "filter.hpp"
+#include "types.hpp"
 
 namespace {
 
 // Trajectory points kept per track, oldest dropped first.
 constexpr std::size_t kHistoryLength = 30;
 
-double seconds_between(std::int64_t from_micros, std::int64_t to_micros) {
-  return static_cast<double>(to_micros - from_micros) /
-         static_cast<double>(kMicrosPerSecond);
-}
+// dlib solves over integers. Costs are squared Mahalanobis distances at
+// most the gate, so this scale keeps six decimal places of resolution.
+constexpr double kCostScale = 1e6;
 
-}  // namespace
+// Reward each gated pair earns on top of its cost, bigger than any total
+// the scaled costs reach, so a match always beats leaving a pair out.
+constexpr std::int64_t kPairReward = 1'000'000'000'000;
 
-Tracker::Tracker(TrackerSettings settings) : settings_(settings) {
-  tracks_.reserve(settings_.reserved_tracks);
-}
-
-Box Tracker::to_world(const Box& box, const Eigen::Matrix4d& vehicle_to_world) {
-  const Eigen::Vector4d local_position(box.center_x, box.center_y, box.center_z,
+// The frame's boxes moved from the vehicle frame to the world frame.
+std::vector<Detection> world_detections(const Frame& frame) {
+  const Eigen::Matrix4d& vehicle_to_world = frame.vehicle_to_world;
+  const double ego_yaw = vehicle_yaw(vehicle_to_world);
+  std::vector<Detection> detections;
+  detections.reserve(frame.detections.size());
+  for (const Detection& detection : frame.detections) {
+    const Box& box = detection.box;
+    const Eigen::Vector4d local_center(box.center_x, box.center_y, box.center_z,
                                        1.0);
-  const Eigen::Vector4d world_position = vehicle_to_world * local_position;
-  Box world_box = box;
-  world_box.center_x = world_position(0);
-  world_box.center_y = world_position(1);
-  world_box.center_z = world_position(2);
-  // The vehicle's own yaw is atan2(R10, R00) of the pose's rotation.
-  world_box.yaw = wrap_angle(
-      box.yaw + std::atan2(vehicle_to_world(1, 0), vehicle_to_world(0, 0)));
-  return world_box;
-}
-
-void Tracker::predict_all_to(std::int64_t capture_time_micros) {
-  for (Track& track : tracks_) {
-    // state_time_micros stops a track being predicted twice in one frame.
-    if (track.state_time_micros >= capture_time_micros) continue;
-    const double dt_seconds =
-        seconds_between(track.state_time_micros, capture_time_micros);
-    predict(track.state, dt_seconds, settings_.noise);
-    track.state_time_micros = capture_time_micros;
+    const Eigen::Vector4d world_center = vehicle_to_world * local_center;
+    Box world_box = box;
+    world_box.center_x = world_center.x();
+    world_box.center_y = world_center.y();
+    world_box.center_z = world_center.z();
+    world_box.yaw = wrap_angle(box.yaw + ego_yaw);
+    detections.push_back(
+        {.object_class = detection.object_class, .box = world_box});
   }
+  return detections;
 }
 
-std::vector<Box> Tracker::boxes_in_world(
-    const std::vector<Detection>& detections,
-    const Eigen::Matrix4d& vehicle_to_world) {
-  std::vector<Box> world_boxes;
-  world_boxes.reserve(detections.size());
-  for (const Detection& detection : detections)
-    world_boxes.push_back(to_world(detection.box, vehicle_to_world));
-  return world_boxes;
-}
-
-std::vector<int> Tracker::track_indices_of(ObjectClass object_class) const {
-  std::vector<int> track_indices;
-  for (std::size_t index = 0; index < tracks_.size(); ++index)
-    if (tracks_[index].object_class == object_class)
-      track_indices.push_back(static_cast<int>(index));
-  return track_indices;
-}
-
-std::vector<int> Tracker::detection_indices_of(
-    const std::vector<Detection>& detections, ObjectClass object_class) {
-  std::vector<int> detection_indices;
-  for (std::size_t index = 0; index < detections.size(); ++index)
-    if (detections[index].object_class == object_class)
-      detection_indices.push_back(static_cast<int>(index));
-  return detection_indices;
-}
-
-void Tracker::fill_cost(Eigen::MatrixXd& cost,
-                        const std::vector<int>& track_indices,
-                        const std::vector<int>& detection_indices,
-                        const std::vector<Box>& world_boxes) const {
-  cost.resize(track_indices.size(), detection_indices.size());
-  for (int row = 0; row < static_cast<int>(track_indices.size()); ++row)
-    for (int column = 0; column < static_cast<int>(detection_indices.size());
-         ++column)
-      cost(row, column) = mahalanobis_squared(
-          tracks_[track_indices[row]].state,
-          world_boxes[detection_indices[column]], settings_.noise);
-}
-
-TrackStatus Tracker::status_for_hits(std::uint32_t hits) const {
-  return hits >= settings_.hits_to_confirm ? TrackStatus::Confirmed
-                                           : TrackStatus::Tentative;
-}
-
-void Tracker::update_matched(Track& track, const Box& world_box) {
-  update(track.state, world_box, settings_.noise);
-  track.hits += 1;
-  track.consecutive_misses = 0;
-  track.status = status_for_hits(track.hits);
-  track.history.emplace_back(track.state.mean(kPositionXIndex),
-                             track.state.mean(kPositionYIndex));
+void append_history(Track& track) {
+  track.history.push_back(track.state.position());
   if (track.history.size() > kHistoryLength)
     track.history.erase(track.history.begin());
 }
 
-bool Tracker::register_miss(Track& track) {
-  track.consecutive_misses += 1;
-  if (track.status == TrackStatus::Tentative) return true;
-  track.status = TrackStatus::Coasting;
-  return track.consecutive_misses >= settings_.misses_to_delete;
+}  // namespace
+
+Assignment assign(const Eigen::MatrixXd& cost, double gate) {
+  const Eigen::Index row_count = cost.rows();
+  const Eigen::Index column_count = cost.cols();
+  const Eigen::Index side = std::max(row_count, column_count);
+  // Padding rows and columns stay at zero reward, so dlib never prefers
+  // them over a real gated pair.
+  dlib::matrix<std::int64_t> reward(side, side);
+  reward = 0;
+  for (Eigen::Index row = 0; row < row_count; ++row)
+    for (Eigen::Index column = 0; column < column_count; ++column)
+      if (cost(row, column) <= gate)
+        reward(row, column) = kPairReward - static_cast<std::int64_t>(
+                                                cost(row, column) * kCostScale);
+
+  Assignment assignment;
+  if (side == 0) return assignment;
+  std::vector<bool> column_matched(column_count, false);
+  const auto column_of_row = dlib::max_cost_assignment(reward);
+  for (Eigen::Index row = 0; row < row_count; ++row) {
+    const Eigen::Index column = column_of_row[row];
+    const bool matched = column < column_count && cost(row, column) <= gate;
+    if (!matched) {
+      assignment.unmatched_rows.push_back(static_cast<int>(row));
+      continue;
+    }
+    assignment.pairs.emplace_back(static_cast<int>(row),
+                                  static_cast<int>(column));
+    column_matched[column] = true;
+  }
+  for (Eigen::Index column = 0; column < column_count; ++column)
+    if (!column_matched[column])
+      assignment.unmatched_columns.push_back(static_cast<int>(column));
+  return assignment;
 }
 
-Track Tracker::start_track(ObjectClass object_class, const Box& world_box,
-                           std::int64_t capture_time_micros) {
-  Track new_track;
-  new_track.track_id = next_track_id_++;
-  new_track.object_class = object_class;
-  new_track.state = initial_state(world_box, settings_.noise);
-  new_track.state_time_micros = capture_time_micros;
-  new_track.hits = 1;
-  new_track.consecutive_misses = 0;
-  new_track.status = status_for_hits(new_track.hits);
-  new_track.history.reserve(kHistoryLength);
-  new_track.history.emplace_back(new_track.state.mean(kPositionXIndex),
-                                 new_track.state.mean(kPositionYIndex));
-  return new_track;
-}
+Tracker::Tracker(TrackerSettings settings)
+    : settings_(settings), filter_(settings.noise) {}
 
-void Tracker::erase_marked(std::vector<bool>& marked_for_deletion) {
-  // marked_for_deletion mirrors tracks_ by index; erase_cursor keeps
-  // the two in step as erase_if visits tracks_ in order.
-  marked_for_deletion.resize(tracks_.size(), false);
-  std::size_t erase_cursor = 0;
-  std::erase_if(tracks_, [&](const Track&) {
-    return marked_for_deletion[erase_cursor++];
+void Tracker::step(const Frame& frame) {
+  const std::int64_t time_micros = frame.capture_time_micros;
+  for (Track& track : tracks_) filter_.advance(track.state, time_micros);
+
+  const std::vector<Detection> detections = world_detections(frame);
+  const Eigen::MatrixXd cost = costs(detections);
+  const Assignment assignment = assign(cost, settings_.gate_chi_squared);
+
+  for (const auto& [track_index, detection_index] : assignment.pairs)
+    update_matched(tracks_[track_index], detections[detection_index].box);
+  for (const int track_index : assignment.unmatched_rows)
+    tracks_[track_index].consecutive_misses += 1;
+  for (const int detection_index : assignment.unmatched_columns)
+    tracks_.push_back(new_track(detections[detection_index], time_micros));
+
+  for (Track& track : tracks_) track.status = next_status(track);
+  std::erase_if(tracks_, [](const Track& track) {
+    return track.status == TrackStatus::Dead;
   });
 }
 
-void Tracker::step(std::int64_t capture_time_micros,
-                   const std::vector<Detection>& detections,
-                   const Eigen::Matrix4d& vehicle_to_world) {
-  predict_all_to(capture_time_micros);
-
-  const std::vector<Box> world_boxes =
-      boxes_in_world(detections, vehicle_to_world);
-
-  std::vector<bool> marked_for_deletion(tracks_.size(), false);
-  std::vector<Track> new_tracks;
-
-  for (ObjectClass object_class :
-       {ObjectClass::Vehicle, ObjectClass::Pedestrian, ObjectClass::Cyclist}) {
-    const std::vector<int> track_indices = track_indices_of(object_class);
-    const std::vector<int> detection_indices =
-        detection_indices_of(detections, object_class);
-
-    Eigen::MatrixXd& cost = cost_by_class_[object_class];
-    fill_cost(cost, track_indices, detection_indices, world_boxes);
-
-    const Assignment assignment =
-        assign(cost, settings_.gate_chi_squared, settings_.assignment);
-
-    for (const auto& [row, column] : assignment.pairs)
-      update_matched(tracks_[track_indices[row]],
-                     world_boxes[detection_indices[column]]);
-
-    for (int unmatched_row : assignment.unmatched_rows) {
-      Track& track = tracks_[track_indices[unmatched_row]];
-      if (register_miss(track))
-        marked_for_deletion[track_indices[unmatched_row]] = true;
-    }
-
-    for (int unmatched_column : assignment.unmatched_columns) {
-      const Box& world_box = world_boxes[detection_indices[unmatched_column]];
-      new_tracks.push_back(
-          start_track(object_class, world_box, capture_time_micros));
-    }
-  }
-
-  for (Track& track : new_tracks) tracks_.push_back(std::move(track));
-
-  erase_marked(marked_for_deletion);
-}
-
-const std::vector<Track>& Tracker::tracks() const {
-  return tracks_;
-}
-
-std::vector<Track> Tracker::confirmed_tracks_at(
-    std::int64_t query_time_micros) const {
-  std::vector<Track> confirmed_tracks;
+std::vector<Track> Tracker::confirmed_at(std::int64_t time_micros) const {
+  std::vector<Track> confirmed;
   for (const Track& track : tracks_) {
-    if (track.status != TrackStatus::Confirmed &&
-        track.status != TrackStatus::Coasting)
-      continue;
-    if (track.hits < settings_.hits_to_confirm) continue;
-    Track predicted_track = track;
-    if (query_time_micros > predicted_track.state_time_micros) {
-      predict(
-          predicted_track.state,
-          seconds_between(predicted_track.state_time_micros, query_time_micros),
-          settings_.noise);
-      predicted_track.state_time_micros = query_time_micros;
-    }
-    confirmed_tracks.push_back(std::move(predicted_track));
+    const bool reported = track.status == TrackStatus::Confirmed ||
+                          track.status == TrackStatus::Coasting;
+    if (!reported) continue;
+    Track predicted = track;
+    filter_.advance(predicted.state, time_micros);
+    confirmed.push_back(std::move(predicted));
   }
-  return confirmed_tracks;
+  return confirmed;
+}
+
+// A class mismatch costs infinity so assign() gates it out, which lets
+// one matrix stand in for one matrix per class.
+Eigen::MatrixXd Tracker::costs(const std::vector<Detection>& detections) const {
+  constexpr double kNoMatch = std::numeric_limits<double>::infinity();
+  const auto track_count = static_cast<Eigen::Index>(tracks_.size());
+  const auto detection_count = static_cast<Eigen::Index>(detections.size());
+  Eigen::MatrixXd cost(track_count, detection_count);
+  for (Eigen::Index row = 0; row < track_count; ++row) {
+    const Track& track = tracks_[row];
+    for (Eigen::Index column = 0; column < detection_count; ++column) {
+      const Detection& detection = detections[column];
+      const bool same_class = track.object_class == detection.object_class;
+      cost(row, column) =
+          same_class ? filter_.distance_squared(track.state, detection.box)
+                     : kNoMatch;
+    }
+  }
+  return cost;
+}
+
+Track Tracker::new_track(const Detection& detection, std::int64_t time_micros) {
+  Track track;
+  track.track_id = next_track_id_++;
+  track.object_class = detection.object_class;
+  track.state = filter_.start_state(detection.box, time_micros);
+  track.hits = 1;
+  append_history(track);
+  return track;
+}
+
+void Tracker::update_matched(Track& track, const Box& box) const {
+  filter_.update(track.state, box);
+  track.hits += 1;
+  track.consecutive_misses = 0;
+  append_history(track);
+}
+
+// The whole track life cycle: confirmation on a clean hit, death from
+// tentative on any miss, death from a run of misses, otherwise coasting.
+TrackStatus Tracker::next_status(const Track& track) const {
+  if (track.consecutive_misses == 0)
+    return track.hits >= settings_.hits_to_confirm ? TrackStatus::Confirmed
+                                                   : TrackStatus::Tentative;
+  if (track.status == TrackStatus::Tentative) return TrackStatus::Dead;
+  if (track.consecutive_misses >= settings_.misses_to_delete)
+    return TrackStatus::Dead;
+  return TrackStatus::Coasting;
 }

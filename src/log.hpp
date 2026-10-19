@@ -1,20 +1,35 @@
-// Declares the in-memory shape of a staged segment and the
-// reader/writer for its binary file, defined in log.cpp.
+// Declares the reader of a staged segment, an MCAP file holding one Segment
+// message and one Frame per lidar frame, both from proto/tracker.proto.
 
 #pragma once
-#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
-#include <vector>
 #include "types.hpp"
 
-// One staged segment, its frames and the box-jitter sigmas the stager
-// measured for it.
-struct SegmentLog {
-  std::string segment_name;
-  std::vector<Frame> frames;
-  double measured_position_sigma = 0.0;
-  double measured_yaw_sigma = 0.0;
+// The segment's name and the detector's measured position and yaw error,
+// which seed the filter's measurement noise.
+struct SegmentInfo {
+  std::string name;
+  double position_sigma = 0.0;
+  double yaw_sigma = 0.0;
 };
 
-SegmentLog read_segment_log(const std::string& path);
-void write_segment_log(const std::string& path, const SegmentLog& segment);
+// Opens a staged segment and hands out its frames one at a time, in time
+// order, so the whole log never sits in memory.
+class SegmentReader {
+ public:
+  explicit SegmentReader(const std::string& path);
+  ~SegmentReader();
+  SegmentReader(const SegmentReader&) = delete;
+  SegmentReader& operator=(const SegmentReader&) = delete;
+  SegmentReader(SegmentReader&&) = default;
+  SegmentReader& operator=(SegmentReader&&) = default;
+  const SegmentInfo& info() const { return info_; }
+  std::optional<Frame> next_frame();
+
+ private:
+  struct Cursor;
+  SegmentInfo info_;
+  std::unique_ptr<Cursor> cursor_;
+};

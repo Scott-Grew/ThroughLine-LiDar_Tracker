@@ -1,10 +1,11 @@
 """Reads Waymo's lidar_box parquet for one segment into GroundTruthBox.
 
-Rows are unfiltered; the stager and both eval scripts apply their own filter.
+Rows are unfiltered; the stager and eval/to_waymo_objects.py apply their
+own filter.
 """
 
 import hashlib
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import pyarrow.parquet as pq
 
@@ -35,7 +36,7 @@ class GroundTruthBox(NamedTuple):
     object_class: int
     box: Box
     num_lidar_points_in_box: int
-    tracking_difficulty: Optional[int]
+    tracking_difficulty: int | None
 
 
 def stable_object_id(laser_object_id):
@@ -83,7 +84,7 @@ def read_ground_truth_boxes(parquet_root, segment_name):
             *box_values,
             num_lidar_points_in_box,
             tracking_difficulty,
-    ) in zip(*columns):
+    ) in zip(*columns, strict = True):
         boxes.append(
             GroundTruthBox(
                 capture_time_micros,

@@ -1,0 +1,41 @@
+// Schema of a staged segment. stage/stage_segment.py writes one Segment
+// message on /segment and one Frame per lidar frame on /frames.
+
+syntax = "proto3";
+
+package tracker;
+
+// An oriented box in the vehicle frame, centre and size in metres and yaw in
+// radians.
+message Box {
+  double center_x = 1;
+  double center_y = 2;
+  double center_z = 3;
+  double length = 4;
+  double width = 5;
+  double height = 6;
+  double yaw = 7;
+}
+
+// One detector output; object_class is Waymo's type code.
+message Detection {
+  uint32 object_class = 1;
+  Box box = 2;
+}
+
+// The detector's position and yaw error against the labels, measured by the
+// stager for the whole segment.
+message Segment {
+  string name = 1;
+  double position_sigma = 2;
+  double yaw_sigma = 3;
+}
+
+// One lidar frame. vehicle_to_world is 4x4 row by row, and points holds x, y,
+// z triples in the vehicle frame.
+message Frame {
+  int64 capture_time_micros = 1;
+  repeated double vehicle_to_world = 2;
+  repeated float points = 3;
+  repeated Detection detections = 4;
+}

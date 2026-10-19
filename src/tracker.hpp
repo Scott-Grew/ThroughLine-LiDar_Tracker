@@ -1,11 +1,11 @@
-// Declares the tracker and the knobs that govern its life cycle. replay.cpp
-// drives it one frame at a time and reads the confirmed tracks back.
+// Declares the tracker and the knobs that govern its life cycle. main.cpp
+// steps it one frame at a time and reads the confirmed tracks back.
 
 #pragma once
 #include <cstdint>
-#include <unordered_map>
+#include <utility>
 #include <vector>
-#include "assign.hpp"
+#include <Eigen/Dense>
 #include "filter.hpp"
 #include "types.hpp"
 
@@ -19,45 +19,37 @@ struct TrackerSettings {
   // Max squared Mahalanobis distance for a match, the chi-squared 0.99
   // quantile at 3 degrees of freedom. A track left unmatched coasts.
   double gate_chi_squared = 11.34;
-  // Track slots reserved up front; the list reallocates only if
-  // more tracks than this are alive at once. Chosen.
-  std::size_t reserved_tracks = 512;
-  AssignmentMethod assignment = AssignmentMethod::Hungarian;
   FilterNoise noise;
 };
 
-// Owns the track list, held in the world frame, and decides frame
-// by frame which detection belongs to which track. One thread only.
+// The matched row/column pairs from one assign() call, plus the rows
+// and columns left unmatched.
+struct Assignment {
+  std::vector<std::pair<int, int>> pairs;
+  std::vector<int> unmatched_rows;
+  std::vector<int> unmatched_columns;
+};
+
+// Minimum-cost matching of rows to columns over the pairs whose cost is
+// within the gate, with as many pairs as possible.
+Assignment assign(const Eigen::MatrixXd& cost, double gate);
+
+// Owns the track list, held in the world frame, and decides frame by
+// frame which detection belongs to which track. One thread only.
 class Tracker {
  public:
   explicit Tracker(TrackerSettings settings);
-  void step(std::int64_t capture_time_micros,
-            const std::vector<Detection>& detections,
-            const Eigen::Matrix4d& vehicle_to_world);
-  const std::vector<Track>& tracks() const;
-  std::vector<Track> confirmed_tracks_at(std::int64_t query_time_micros) const;
+  void step(const Frame& frame);
+  std::vector<Track> confirmed_at(std::int64_t time_micros) const;
 
  private:
-  void predict_all_to(std::int64_t capture_time_micros);
-  static Box to_world(const Box& box, const Eigen::Matrix4d& vehicle_to_world);
-  static std::vector<Box> boxes_in_world(
-      const std::vector<Detection>& detections,
-      const Eigen::Matrix4d& vehicle_to_world);
-  std::vector<int> track_indices_of(ObjectClass object_class) const;
-  static std::vector<int> detection_indices_of(
-      const std::vector<Detection>& detections, ObjectClass object_class);
-  void fill_cost(Eigen::MatrixXd& cost, const std::vector<int>& track_indices,
-                 const std::vector<int>& detection_indices,
-                 const std::vector<Box>& world_boxes) const;
-  TrackStatus status_for_hits(std::uint32_t hits) const;
-  void update_matched(Track& track, const Box& world_box);
-  bool register_miss(Track& track);
-  Track start_track(ObjectClass object_class, const Box& world_box,
-                    std::int64_t capture_time_micros);
-  void erase_marked(std::vector<bool>& marked_for_deletion);
+  Eigen::MatrixXd costs(const std::vector<Detection>& detections) const;
+  Track new_track(const Detection& detection, std::int64_t time_micros);
+  void update_matched(Track& track, const Box& box) const;
+  TrackStatus next_status(const Track& track) const;
 
   TrackerSettings settings_;
+  MotionFilter filter_;
   std::vector<Track> tracks_;
   std::uint64_t next_track_id_ = 1;
-  std::unordered_map<ObjectClass, Eigen::MatrixXd> cost_by_class_;
 };

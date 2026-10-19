@@ -45,18 +45,15 @@ add_library(dlib_headers INTERFACE)
 target_include_directories(dlib_headers INTERFACE ${dlib_SOURCE_DIR})
 target_compile_definitions(dlib_headers INTERFACE DLIB_NO_GUI_SUPPORT)
 
-add_library(tracker_core
-  src/log.cpp
-  src/perturb.cpp
-  src/filter.cpp
-  src/assign.cpp
-  src/tracker.cpp
-  src/predict.cpp
-  src/replay.cpp
-  src/export.cpp
+# The MCAP reader is header-only; log.cpp compiles its implementation.
+FetchContent_Declare(
+  mcap
+  URL https://github.com/foxglove/mcap/archive/refs/tags/releases/cpp/v2.1.3.zip
 )
-target_include_directories(tracker_core PUBLIC src)
-target_link_libraries(tracker_core PUBLIC Eigen3::Eigen dlib_headers)
+FetchContent_Populate(mcap)
+add_library(mcap_headers INTERFACE)
+target_include_directories(mcap_headers INTERFACE
+  ${mcap_SOURCE_DIR}/cpp/mcap/include)
 
 # Foxglove SDK 0.27.0 for x86_64 macOS is a prebuilt C library plus C++
 # wrapper sources with their own package config, populated and then found.
@@ -70,13 +67,10 @@ list(APPEND CMAKE_PREFIX_PATH "${foxglove_sdk_SOURCE_DIR}")
 find_package(foxglove-sdk CONFIG REQUIRED)
 foxglove_sdk_add_cpp_library(foxglove_cpp TYPE STATIC REMOTE_ACCESS OFF)
 
-# The wrapper's static archive leaves zstd and lz4 unresolved; both come from
-# Homebrew under /usr/local.
-find_library(ZSTD_LIBRARY NAMES zstd PATHS /usr/local/lib)
-find_library(LZ4_LIBRARY NAMES lz4 PATHS /usr/local/lib)
-if(NOT ZSTD_LIBRARY OR NOT LZ4_LIBRARY)
-  message(FATAL_ERROR "foxglove_cpp needs zstd and lz4 (brew install zstd lz4)")
-endif()
+# zstd and lz4 come from Homebrew; the SDK archive and the MCAP reader both
+# leave them unresolved.
+find_library(ZSTD_LIBRARY NAMES zstd PATHS /usr/local/lib REQUIRED)
+find_library(LZ4_LIBRARY NAMES lz4 PATHS /usr/local/lib REQUIRED)
 target_link_libraries(foxglove_cpp PUBLIC
   ${ZSTD_LIBRARY}
   ${LZ4_LIBRARY}
@@ -86,21 +80,28 @@ target_link_libraries(foxglove_cpp PUBLIC
   "-framework SystemConfiguration"
 )
 
-add_executable(tracker
-  src/main.cpp
-  src/recording.cpp
-)
-target_link_libraries(tracker PRIVATE tracker_core foxglove_cpp CLI11::CLI11)
+# The staged log's schema, generated from proto/tracker.proto.
+find_package(Protobuf CONFIG REQUIRED)
+add_library(tracker_proto STATIC proto/tracker.proto)
+target_link_libraries(tracker_proto PUBLIC protobuf::libprotobuf)
+target_include_directories(tracker_proto SYSTEM PUBLIC
+  ${CMAKE_CURRENT_BINARY_DIR}
+  $<TARGET_PROPERTY:protobuf::libprotobuf,INTERFACE_INCLUDE_DIRECTORIES>)
+protobuf_generate(TARGET tracker_proto IMPORT_DIRS proto
+  PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
+add_library(tracker_core src/filter.cpp src/tracker.cpp)
+target_include_directories(tracker_core PUBLIC src)
+target_link_libraries(tracker_core PUBLIC Eigen3::Eigen dlib_headers)
+
+add_executable(tracker src/main.cpp src/log.cpp src/scene.cpp)
+target_link_libraries(tracker PRIVATE
+  tracker_core tracker_proto mcap_headers foxglove_cpp CLI11::CLI11)
 
 enable_testing()
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
-add_executable(tracker_tests
-  tests/test_determinism.cpp
-  tests/test_filter.cpp
-  tests/test_assign.cpp
-  tests/test_allocation.cpp
-)
+add_executable(tracker_tests tests/test_filter.cpp tests/test_assign.cpp)
 target_link_libraries(tracker_tests PRIVATE tracker_core Catch2::Catch2WithMain)
 catch_discover_tests(tracker_tests)

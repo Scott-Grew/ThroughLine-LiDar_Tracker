@@ -12,7 +12,7 @@ from waymo_open_dataset.protos import metrics_pb2
 
 sys.path.insert(0,
                 str(pathlib.Path(__file__).resolve().parent.parent / "stage"))
-from waymo_boxes import read_ground_truth_boxes, TRACKED_OBJECT_CLASSES
+from waymo_boxes import TRACKED_OBJECT_CLASSES, read_ground_truth_boxes
 
 
 def build_ground_truth_objects(parquet_root, segment_name):

@@ -1,7 +1,8 @@
-// Shared data shapes for detections, ground truth, frames, filter
-// state and tracks. Each module includes it.
+// Shared data shapes for detections, frames, filter state and tracks. Each
+// module includes it.
 
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <vector>
 #include <Eigen/Dense>
@@ -14,74 +15,89 @@ constexpr std::int64_t kMicrosPerSecond = 1'000'000;
 enum class ObjectClass : std::uint8_t {
   Vehicle = 1,
   Pedestrian = 2,
-  Cyclist = 4
+  Cyclist = 4,
 };
 
-// A 3D oriented box with center, extents and yaw. Detection and
-// GroundTruthBox hold it in the vehicle frame, tracks in the world frame.
+// A 3D oriented box with center, extents and yaw. Detections hold it in the
+// vehicle frame, tracks in the world frame.
 struct Box {
-  double center_x, center_y, center_z;
-  double length, width, height;
-  double yaw;
+  double center_x = 0.0;
+  double center_y = 0.0;
+  double center_z = 0.0;
+  double length = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+  double yaw = 0.0;
 };
 
-// One perceived object in a frame, with the detector's confidence.
+// One detector output in a frame.
 struct Detection {
-  ObjectClass object_class;
+  ObjectClass object_class = ObjectClass::Vehicle;
   Box box;
-  float score;
 };
 
-// One labeled ground-truth object and its lidar point support.
-struct GroundTruthBox {
-  std::uint64_t object_id;
-  ObjectClass object_class;
-  Box box;
-  std::int32_t lidar_points_in_box;
-};
-
-// One lidar point in the sensor's local (vehicle) frame.
+// One lidar point in the vehicle frame.
 struct Point {
-  float x, y, z;
+  float x = 0.0F;
+  float y = 0.0F;
+  float z = 0.0F;
 };
 
 // One frame of the log with its capture time, the vehicle's pose in the
-// world frame, its lidar points and the ground-truth boxes visible in it.
+// world frame, its lidar points and the detections made in it.
 struct Frame {
-  std::int64_t capture_time_micros;
-  Eigen::Matrix4d vehicle_to_world;
+  std::int64_t capture_time_micros = 0;
+  Eigen::Matrix4d vehicle_to_world = Eigen::Matrix4d::Identity();
   std::vector<Point> points;
-  std::vector<GroundTruthBox> ground_truth;
+  std::vector<Detection> detections;
 };
 
-// Rows of TrackState::mean and of both covariance axes. A measured
-// box fills the first three, so they also index the innovation.
-constexpr int kPositionXIndex = 0;
-constexpr int kPositionYIndex = 1;
-constexpr int kYawIndex = 2;
-constexpr int kSpeedIndex = 3;
-constexpr int kYawRateIndex = 4;
+// Positions of x, y, yaw, speed and yaw rate in the filter state and its
+// covariance. A measured box fills the first three.
+constexpr int kStateX = 0;
+constexpr int kStateY = 1;
+constexpr int kStateYaw = 2;
+constexpr int kStateSpeed = 3;
+constexpr int kStateYawRate = 4;
+constexpr int kStateSize = 5;
+constexpr int kMeasuredSize = 3;
+
+using StateVector = Eigen::Matrix<double, kStateSize, 1>;
+using StateMatrix = Eigen::Matrix<double, kStateSize, kStateSize>;
 
 // Filter mean and covariance over x, y, yaw, speed and yaw rate in the
-// world frame, in m, rad, m/s and rad/s, plus the smoothed box size.
+// world frame, in m, rad, m/s and rad/s, the time they hold for, and the
+// smoothed box size.
 struct TrackState {
-  Eigen::Matrix<double, 5, 1> mean;
-  Eigen::Matrix<double, 5, 5> covariance;
-  double center_z, length, width, height;
+  StateVector mean = StateVector::Zero();
+  StateMatrix covariance = StateMatrix::Zero();
+  std::int64_t time_micros = 0;
+  double center_z = 0.0;
+  double length = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+
+  Eigen::Vector2d position() const { return mean.head<2>(); }
+  double yaw() const { return mean(kStateYaw); }
 };
 
-// A track is tentative, confirmed or coasting.
-enum class TrackStatus : std::uint8_t { Tentative, Confirmed, Coasting };
+// A track is tentative, confirmed, coasting on a miss, or dead and
+// about to be erased.
+enum class TrackStatus : std::uint8_t { Tentative, Confirmed, Coasting, Dead };
 
 // One tracked object with its identity, class, life-cycle state, current
 // filter state and recent position history for drawing.
 struct Track {
-  std::uint64_t track_id;
-  ObjectClass object_class;
-  TrackStatus status;
+  std::uint64_t track_id = 0;
+  ObjectClass object_class = ObjectClass::Vehicle;
+  TrackStatus status = TrackStatus::Tentative;
   TrackState state;
-  std::int64_t state_time_micros;
-  std::uint32_t hits;
-  std::uint32_t consecutive_misses;
+  std::uint32_t hits = 0;
+  std::uint32_t consecutive_misses = 0;
   std::vector<Eigen::Vector2d> history;
 };
+
+// The vehicle's own yaw is atan2(R10, R00) of the pose's rotation.
+inline double vehicle_yaw(const Eigen::Matrix4d& vehicle_to_world) {
+  return std::atan2(vehicle_to_world(1, 0), vehicle_to_world(0, 0));
+}

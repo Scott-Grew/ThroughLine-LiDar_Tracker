@@ -7,7 +7,7 @@
 #include <limits>
 #include <random>
 #include <vector>
-#include "assign.hpp"
+#include "tracker.hpp"
 
 namespace {
 
@@ -23,24 +23,27 @@ double objective(int pair_count, double total_cost) {
   return -static_cast<double>(pair_count) * kPairCountWeight + total_cost;
 }
 
-double best_brute_force_objective(const Eigen::MatrixXd& cost, double gate,
-                                  int row, std::vector<bool>& column_used,
-                                  int pair_count, double total_cost) {
-  if (row == cost.rows()) return objective(pair_count, total_cost);
+// Exhaustive search over gated row-to-column matchings of one cost grid,
+// one row at a time, with column_used marking the columns taken so far.
+struct BruteForce {
+  const Eigen::MatrixXd& cost;
+  double gate;
+  std::vector<bool> column_used;
 
-  double best_objective = best_brute_force_objective(
-      cost, gate, row + 1, column_used, pair_count, total_cost);
-  for (int column = 0; column < cost.cols(); ++column) {
-    if (column_used[column] || cost(row, column) > gate) continue;
-    column_used[column] = true;
-    const double candidate_objective = best_brute_force_objective(
-        cost, gate, row + 1, column_used, pair_count + 1,
-        total_cost + cost(row, column));
-    column_used[column] = false;
-    best_objective = std::min(best_objective, candidate_objective);
+  double best_objective(int row, int pair_count, double total_cost) {
+    if (row == cost.rows()) return objective(pair_count, total_cost);
+    double best = best_objective(row + 1, pair_count, total_cost);
+    for (int column = 0; column < cost.cols(); ++column) {
+      if (column_used[column] || cost(row, column) > gate) continue;
+      column_used[column] = true;
+      const double candidate = best_objective(row + 1, pair_count + 1,
+                                              total_cost + cost(row, column));
+      column_used[column] = false;
+      best = std::min(best, candidate);
+    }
+    return best;
   }
-  return best_objective;
-}
+};
 
 }  // namespace
 
@@ -62,17 +65,17 @@ TEST_CASE("hungarian matches brute force") {
                                 ? std::numeric_limits<double>::infinity()
                                 : cost_draw(generator);
 
-    const Assignment assignment =
-        assign(cost, kGate, AssignmentMethod::Hungarian);
+    const Assignment assignment = assign(cost, kGate);
     double hungarian_total_cost = 0.0;
     for (const auto& [row, column] : assignment.pairs)
       hungarian_total_cost += cost(row, column);
     const double hungarian_objective = objective(
         static_cast<int>(assignment.pairs.size()), hungarian_total_cost);
 
-    std::vector<bool> column_used(column_count, false);
-    const double brute_force_result =
-        best_brute_force_objective(cost, kGate, 0, column_used, 0, 0.0);
+    BruteForce brute_force{.cost = cost,
+                           .gate = kGate,
+                           .column_used = std::vector<bool>(column_count)};
+    const double brute_force_result = brute_force.best_objective(0, 0, 0.0);
 
     INFO("trial " << trial << " rows " << row_count << " columns "
                   << column_count);

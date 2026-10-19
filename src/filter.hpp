@@ -1,7 +1,8 @@
-// Declares the extended Kalman filter that tracker.cpp runs per track
-// for state initialisation, prediction and measurement update.
+// Declares the extended Kalman filter each track runs over x, y, yaw,
+// speed and yaw rate. tracker.cpp and recording.cpp hold one each.
 
 #pragma once
+#include <cstdint>
 #include <Eigen/Dense>
 #include "types.hpp"
 
@@ -13,7 +14,7 @@ struct FilterNoise {
   double sigma_acceleration = 2.0;
   double sigma_yaw_acceleration = 0.5;
   // Measurement sigmas are the box jitter stage_segment.py measured for
-  // the segment, in metres and radians. initial_state refuses <= 0.
+  // the segment, in metres and radians. MotionFilter refuses <= 0.
   double sigma_measurement_position = 0.0;
   double sigma_measurement_yaw = 0.0;
 };
@@ -23,13 +24,26 @@ struct FilterNoise {
 constexpr double kStraightLineYawRate = 1e-4;
 
 double wrap_angle(double radians);
-TrackState initial_state(const Box& box, const FilterNoise& noise);
-void predict(TrackState& state, double dt_seconds, const FilterNoise& noise);
-Eigen::Vector3d compute_innovation(const TrackState& state,
-                                   const Box& measurement);
-Eigen::Matrix3d compute_innovation_covariance(const TrackState& state,
-                                              const FilterNoise& noise);
-double mahalanobis_squared(const TrackState& state, const Box& measurement,
-                           const FilterNoise& noise);
-void update(TrackState& state, const Box& measurement,
-            const FilterNoise& noise);
+
+// Constant-turn-rate extended Kalman filter. It holds the noise, so each
+// call takes only the state it works on.
+class MotionFilter {
+ public:
+  explicit MotionFilter(FilterNoise noise);
+
+  // A state at the measured box, with speed and yaw rate unknown.
+  [[nodiscard]] TrackState start_state(Box box, std::int64_t time_micros) const;
+
+  // Moves the state forward to time_micros; a state already at or past
+  // that time is left alone.
+  void advance(TrackState& state, std::int64_t time_micros) const;
+  void predict(TrackState& state, double dt_seconds) const;
+
+  // Squared Mahalanobis distance between the state and a measured box.
+  [[nodiscard]] double distance_squared(const TrackState& state, Box box) const;
+  void update(TrackState& state, Box box) const;
+
+ private:
+  FilterNoise noise_;
+  Eigen::Matrix3d measurement_noise_;
+};

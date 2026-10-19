@@ -1,144 +1,123 @@
-// Reads and writes the staged binary log that stage_segment.py
-// writes in the same layout from Python.
+// Reads a staged segment with the MCAP library and protobuf; main.cpp pulls
+// one frame at a time from it.
 
+#define MCAP_IMPLEMENTATION
 #include "log.hpp"
 
-#include <fstream>
+#include <cstring>
+#include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
+#include <mcap/errors.hpp>
+#include <mcap/reader.hpp>
+#include <mcap/types.hpp>
+#include "tracker.pb.h"
+#include "types.hpp"
 
 namespace {
 
-// Bumped whenever the layout changes, so a log staged under an
-// older layout is refused instead of silently misread.
-constexpr char kMagic[8] = {'T', 'R', 'K', 'L', 'O', 'G', '0', '3'};
-
-template <typename Value>
-void write_value(std::ofstream& stream, const Value& value) {
-  stream.write(reinterpret_cast<const char*>(&value), sizeof(Value));
-}
-
-template <typename Value>
-Value read_value(std::ifstream& stream) {
-  Value value;
-  stream.read(reinterpret_cast<char*>(&value), sizeof(Value));
-  if (!stream)
-    throw std::runtime_error(
-        "segment log truncated; restage it with stage/stage_segment.py");
-  return value;
-}
-
-void write_box(std::ofstream& stream, const Box& box) {
-  write_value(stream, box.center_x);
-  write_value(stream, box.center_y);
-  write_value(stream, box.center_z);
-  write_value(stream, box.length);
-  write_value(stream, box.width);
-  write_value(stream, box.height);
-  write_value(stream, box.yaw);
-}
-
-Box read_box(std::ifstream& stream) {
+Box to_box(const tracker::Box& message) {
   Box box;
-  box.center_x = read_value<double>(stream);
-  box.center_y = read_value<double>(stream);
-  box.center_z = read_value<double>(stream);
-  box.length = read_value<double>(stream);
-  box.width = read_value<double>(stream);
-  box.height = read_value<double>(stream);
-  box.yaw = read_value<double>(stream);
+  box.center_x = message.center_x();
+  box.center_y = message.center_y();
+  box.center_z = message.center_z();
+  box.length = message.length();
+  box.width = message.width();
+  box.height = message.height();
+  box.yaw = message.yaw();
   return box;
 }
 
+Frame to_frame(const tracker::Frame& message) {
+  using RowMajorPose = Eigen::Matrix<double, 4, 4, Eigen::RowMajor>;
+  Frame frame;
+  frame.capture_time_micros = message.capture_time_micros();
+  frame.vehicle_to_world =
+      Eigen::Map<const RowMajorPose>(message.vehicle_to_world().data());
+  // The log stores x, y, z triples, the same layout as Point.
+  static_assert(sizeof(Point) == 3 * sizeof(float));
+  frame.points.resize(message.points_size() / 3);
+  std::memcpy(frame.points.data(), message.points().data(),
+              frame.points.size() * sizeof(Point));
+  frame.detections.reserve(message.detections_size());
+  for (const tracker::Detection& detection : message.detections()) {
+    const auto object_class =
+        static_cast<ObjectClass>(detection.object_class());
+    frame.detections.push_back(
+        {.object_class = object_class, .box = to_box(detection.box())});
+  }
+  return frame;
+}
+
+template <typename Message>
+Message parse(const mcap::Message& record, const std::string& path) {
+  Message message;
+  const auto size = static_cast<int>(record.dataSize);
+  if (!message.ParseFromArray(record.data, size))
+    throw std::runtime_error(path + ": cannot parse a message");
+  return message;
+}
+
+// The message view and the iterator into it, built in this order because
+// the iterators refer back to the view.
+struct Messages {
+  explicit Messages(mcap::LinearMessageView all_messages)
+      : view(std::move(all_messages)), next(view.begin()), end(view.end()) {}
+  mcap::LinearMessageView view;
+  mcap::LinearMessageView::Iterator next;
+  mcap::LinearMessageView::Iterator end;
+};
+
 }  // namespace
 
-void write_segment_log(const std::string& path, const SegmentLog& segment) {
-  std::ofstream stream(path, std::ios::binary);
-  if (!stream) throw std::runtime_error("cannot open " + path);
-  stream.write(kMagic, sizeof(kMagic));
-  write_value(stream, static_cast<std::uint32_t>(segment.frames.size()));
-  write_value(stream, static_cast<std::uint32_t>(segment.segment_name.size()));
-  stream.write(segment.segment_name.data(), segment.segment_name.size());
-  write_value(stream, segment.measured_position_sigma);
-  write_value(stream, segment.measured_yaw_sigma);
-  for (const Frame& frame : segment.frames) {
-    write_value(stream, frame.capture_time_micros);
-    for (int row = 0; row < 4; ++row)
-      for (int column = 0; column < 4; ++column)
-        write_value(stream, frame.vehicle_to_world(row, column));
-    write_value(stream, static_cast<std::uint32_t>(frame.points.size()));
-    stream.write(reinterpret_cast<const char*>(frame.points.data()),
-                 frame.points.size() * sizeof(Point));
-    write_value(stream, static_cast<std::uint32_t>(frame.ground_truth.size()));
-    for (const GroundTruthBox& ground_truth_box : frame.ground_truth) {
-      write_value(stream, ground_truth_box.object_id);
-      write_value(stream,
-                  static_cast<std::uint8_t>(ground_truth_box.object_class));
-      write_box(stream, ground_truth_box.box);
-      write_value(stream, ground_truth_box.lidar_points_in_box);
-    }
+// The open file, the first problem the library reported while reading it,
+// and the messages; all live as long as the SegmentReader.
+struct SegmentReader::Cursor {
+  std::string path;
+  std::string problem;
+  mcap::McapReader reader;
+  std::unique_ptr<Messages> messages;
+
+  void throw_on_problem() const {
+    if (!problem.empty()) throw std::runtime_error(path + ": " + problem);
   }
+};
+
+SegmentReader::SegmentReader(const std::string& path)
+    : cursor_(std::make_unique<Cursor>()) {
+  cursor_->path = path;
+  const mcap::Status opened = cursor_->reader.open(path);
+  if (!opened.ok()) throw std::runtime_error(path + ": " + opened.message);
+  const auto remember = [cursor = cursor_.get()](const mcap::Status& status) {
+    if (cursor->problem.empty()) cursor->problem = status.message;
+  };
+  cursor_->messages =
+      std::make_unique<Messages>(cursor_->reader.readMessages(remember));
+  cursor_->throw_on_problem();
+
+  Messages& messages = *cursor_->messages;
+  const bool has_header = messages.next != messages.end &&
+                          messages.next->channel->topic == "/segment";
+  if (!has_header)
+    throw std::runtime_error(path + ": no /segment message at the start");
+  const auto header = parse<tracker::Segment>(messages.next->message, path);
+  info_ = {.name = header.name(),
+           .position_sigma = header.position_sigma(),
+           .yaw_sigma = header.yaw_sigma()};
+  ++messages.next;
+  cursor_->throw_on_problem();
 }
 
-SegmentLog read_segment_log(const std::string& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) throw std::runtime_error("cannot open " + path);
-  char magic[8];
-  stream.read(magic, sizeof(magic));
-  if (!stream || std::string(magic, 8) != std::string(kMagic, 8))
-    throw std::runtime_error(path + ": not a " + std::string(kMagic, 8) +
-                             " segment log; restage it with "
-                             "stage/stage_segment.py");
-  SegmentLog segment;
-  const auto frame_count = read_value<std::uint32_t>(stream);
-  const auto name_length = read_value<std::uint32_t>(stream);
-  segment.segment_name.resize(name_length);
-  stream.read(segment.segment_name.data(), name_length);
-  segment.measured_position_sigma = read_value<double>(stream);
-  segment.measured_yaw_sigma = read_value<double>(stream);
-  segment.frames.resize(frame_count);
-  for (Frame& frame : segment.frames) {
-    frame.capture_time_micros = read_value<std::int64_t>(stream);
-    for (int row = 0; row < 4; ++row)
-      for (int column = 0; column < 4; ++column)
-        frame.vehicle_to_world(row, column) = read_value<double>(stream);
-    frame.points.resize(read_value<std::uint32_t>(stream));
-    stream.read(reinterpret_cast<char*>(frame.points.data()),
-                frame.points.size() * sizeof(Point));
-    frame.ground_truth.resize(read_value<std::uint32_t>(stream));
-    for (GroundTruthBox& ground_truth_box : frame.ground_truth) {
-      ground_truth_box.object_id = read_value<std::uint64_t>(stream);
-      ground_truth_box.object_class =
-          static_cast<ObjectClass>(read_value<std::uint8_t>(stream));
-      ground_truth_box.box = read_box(stream);
-      ground_truth_box.lidar_points_in_box = read_value<std::int32_t>(stream);
-    }
-    if (!stream)
-      throw std::runtime_error(
-          "segment log truncated; restage it with stage/stage_segment.py");
-  }
-  return segment;
-}
+SegmentReader::~SegmentReader() = default;
 
-// clang-format off
-// Staged log layout, little-endian with no padding and sizes in bytes. The
-// counts on the right are from segment 10203656353524179475, laser 1.
-//
-//   header  magic "TRKLOG03"    chars     8
-//           frame_count         uint32    4     198
-//           name_length         uint32    4     38
-//           segment_name        chars     name_length
-//           position_sigma      float64   8     metres
-//           yaw_sigma           float64   8     radians
-//
-//   frame   capture_time        int64     8     microseconds
-//           vehicle_to_world    float64   128   4x4, row by row
-//           point_count         uint32    4     about 113,000
-//           points              float32   12 per point, x, y, z, vehicle frame
-//           box_count           uint32    4     8 to 33
-//
-//   box     object_id           uint64    8
-//           object_class        uint8     1     1, 2 or 4
-//           box                 float64   56    centre x y z, length, width
-//                                               and height in m, yaw in rad
-//           lidar_points_in_box int32     4
-// clang-format on
+std::optional<Frame> SegmentReader::next_frame() {
+  Messages& messages = *cursor_->messages;
+  if (messages.next == messages.end) return std::nullopt;
+  const auto message =
+      parse<tracker::Frame>(messages.next->message, cursor_->path);
+  ++messages.next;
+  cursor_->throw_on_problem();
+  return to_frame(message);
+}
