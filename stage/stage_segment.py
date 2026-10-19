@@ -1,5 +1,5 @@
-"""Stages one Waymo v2 segment as an MCAP log for the C++ tracker, with lidar
-points from the parquet tables and boxes from CasA's published detections."""
+"""Stages one Waymo v2 segment as an MCAP log for the C++ tracker, with every
+laser's points from the parquet tables and boxes from CasA's detections."""
 
 import argparse
 import pickle
@@ -7,6 +7,7 @@ import pickle
 import numpy as np
 import pyarrow.parquet as pq
 import tracker_pb2
+from mcap.writer import CompressionType
 from mcap_protobuf.writer import Writer
 from waymo_boxes import TRACKED_OBJECT_CLASSES, read_ground_truth_boxes
 
@@ -53,17 +54,19 @@ def read_table(parquet_root, component, segment_name, **options):
     return pq.read_table(path, **options)
 
 
-def read_calibration(parquet_root, segment_name, laser):
-    """Returns the laser's sensor-to-vehicle transform and its beam
-    inclinations as (values or None, min, max)."""
-    table = read_table(parquet_root, "lidar_calibration", segment_name,
-                       filters = [("key.laser_name", "=", laser)])
-    row = table.to_pylist()[0]
-    extrinsic = np.array(row[f"{CALIBRATION}.extrinsic.transform"])
-    values = row[f"{CALIBRATION}.beam_inclination.values"]
-    low = row[f"{CALIBRATION}.beam_inclination.min"]
-    high = row[f"{CALIBRATION}.beam_inclination.max"]
-    return extrinsic.reshape(4, 4), values, low, high
+def read_calibrations(parquet_root, segment_name):
+    """Returns {laser name: (sensor-to-vehicle transform, beam inclination
+    values or None, min, max)} for every laser on the car."""
+    table = read_table(parquet_root, "lidar_calibration", segment_name)
+    calibrations = {}
+    for row in table.to_pylist():
+        extrinsic = np.array(row[f"{CALIBRATION}.extrinsic.transform"])
+        values = row[f"{CALIBRATION}.beam_inclination.values"]
+        low = row[f"{CALIBRATION}.beam_inclination.min"]
+        high = row[f"{CALIBRATION}.beam_inclination.max"]
+        calibrations[row["key.laser_name"]] = (extrinsic.reshape(4, 4),
+                                               values, low, high)
+    return calibrations
 
 
 def range_image_to_points(range_image, calibration):
@@ -98,25 +101,29 @@ def range_image_to_points(range_image, calibration):
     return vehicle_points[:3].T.astype(np.float32)
 
 
-def read_points(parquet_root, segment_name, laser):
-    """Returns {capture time in microseconds: (N, 3) vehicle-frame points}."""
-    calibration = read_calibration(parquet_root, segment_name, laser)
+def read_points(parquet_root, segment_name):
+    """Returns {capture time in microseconds: (N, 3) vehicle-frame points},
+    every laser's points concatenated per frame."""
+    calibrations = read_calibrations(parquet_root, segment_name)
     columns = [
         "key.frame_timestamp_micros",
+        "key.laser_name",
         f"{RANGE_IMAGE}.values",
         f"{RANGE_IMAGE}.shape",
     ]
-    table = read_table(parquet_root, "lidar", segment_name, columns = columns,
-                       filters = [("key.laser_name", "=", laser)])
+    table = read_table(parquet_root, "lidar", segment_name, columns = columns)
     times = table.column(columns[0]).to_pylist()
+    lasers = table.column(columns[1]).to_pylist()
     points_by_time = {}
-    for row, capture_time in enumerate(times):
-        flat_values = table.column(columns[1])[row].values.to_numpy()
-        shape = table.column(columns[2])[row].as_py()
+    for row, (capture_time, laser) in enumerate(zip(times, lasers,
+                                                    strict = True)):
+        flat_values = table.column(columns[2])[row].values.to_numpy()
+        shape = table.column(columns[3])[row].as_py()
         range_image = flat_values.reshape(shape)
-        points = range_image_to_points(range_image, calibration)
-        points_by_time[capture_time] = points
-    return points_by_time
+        points = range_image_to_points(range_image, calibrations[laser])
+        points_by_time.setdefault(capture_time, []).append(points)
+    return {time: np.concatenate(parts) for time, parts in
+            points_by_time.items()}
 
 
 def read_poses(parquet_root, segment_name):
@@ -265,12 +272,11 @@ def main():
     parser.add_argument("--segment", dest = "segment_name", required = True)
     parser.add_argument("--detections", required = True)
     parser.add_argument("--out", required = True)
-    parser.add_argument("--laser", type = int, default = 1)
     arguments = parser.parse_args()
     parquet_root = arguments.parquet_root
     segment_name = arguments.segment_name
 
-    points_by_time = read_points(parquet_root, segment_name, arguments.laser)
+    points_by_time = read_points(parquet_root, segment_name)
     poses = read_poses(parquet_root, segment_name)
     times = sorted(time for time in points_by_time if time in poses)
     detections = read_detections(arguments.detections, segment_name)
@@ -288,7 +294,8 @@ def main():
     segment = tracker_pb2.Segment(name = segment_name,
                                   position_sigma = position_sigma,
                                   yaw_sigma = yaw_sigma)
-    with Writer(arguments.out) as writer:
+    # Uncompressed, so the tracker reads a frame without decompressing it.
+    with Writer(arguments.out, compression = CompressionType.NONE) as writer:
         first_nanoseconds = times[0] * 1000
         writer.write_message("/segment", segment, log_time = first_nanoseconds,
                              publish_time = first_nanoseconds)

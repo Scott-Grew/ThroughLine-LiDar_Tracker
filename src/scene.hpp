@@ -39,4 +39,6 @@ class Scene {
   Eigen::Vector3d origin_ = Eigen::Vector3d::Zero();
   bool has_origin_ = false;
   std::vector<std::uint64_t> drawn_track_ids_;
+  // Packed x, y, z and colour per point, kept so no frame allocates it.
+  std::vector<float> packed_points_;
 };

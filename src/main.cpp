@@ -30,13 +30,15 @@ using Clock = std::chrono::steady_clock;
 using Micros = std::chrono::microseconds;
 
 // Writes one row per confirmed track per frame, boxes in the frame's own
-// vehicle frame, which is what Waymo's evaluator compares against.
+// vehicle frame, which is what Waymo's evaluator compares against, plus the
+// world-frame speed and yaw rate for diagnostics.
 class CsvWriter {
  public:
   explicit CsvWriter(const std::string& path) : stream_(path) {
     if (!stream_) throw std::runtime_error("cannot open " + path);
     stream_ << "frame_timestamp_micros,track_id,object_class,center_x,"
-               "center_y,center_z,length,width,height,yaw\n";
+               "center_y,center_z,length,width,height,yaw,speed,"
+               "yaw_rate\n";
   }
 
   void write(const Frame& frame, const std::vector<Track>& tracks) {
@@ -52,7 +54,8 @@ class CsvWriter {
               << static_cast<int>(track.object_class) << ',' << local.x() << ','
               << local.y() << ',' << local.z() << ',' << track.state.length
               << ',' << track.state.width << ',' << track.state.height << ','
-              << yaw << '\n';
+              << yaw << ',' << track.state.mean(kStateSpeed) << ','
+              << track.state.mean(kStateYawRate) << '\n';
     }
   }
 
@@ -60,9 +63,14 @@ class CsvWriter {
   std::ofstream stream_;
 };
 
-// Wall-clock time of each frame's tracking step, in milliseconds.
-struct StepTimes {
+// Wall-clock milliseconds per frame for one stage of the pipeline.
+struct StageTimes {
   std::vector<double> milliseconds;
+
+  void record(Clock::time_point start, Clock::time_point end) {
+    const std::chrono::duration<double, std::milli> elapsed = end - start;
+    milliseconds.push_back(elapsed.count());
+  }
 
   // The sample at index floor(fraction * (n - 1)) of the sorted times.
   double percentile(double fraction) const {
@@ -78,6 +86,30 @@ struct StepTimes {
       return step > frame_period_milliseconds;
     };
     return static_cast<std::size_t>(std::ranges::count_if(milliseconds, slow));
+  }
+};
+
+// Read, track and publish times per frame, and their sum, which is the
+// latency from a frame being available to its scene being out.
+struct FrameTimes {
+  StageTimes read;
+  StageTimes track;
+  StageTimes publish;
+  StageTimes frame;
+
+  void close_frame() {
+    frame.milliseconds.push_back(read.milliseconds.back() +
+                                 track.milliseconds.back() +
+                                 publish.milliseconds.back());
+  }
+
+  void print(std::ostream& out, double frame_period_milliseconds) const {
+    out << "read_p50_ms " << read.percentile(0.5) << " track_p50_ms "
+        << track.percentile(0.5) << " publish_p50_ms "
+        << publish.percentile(0.5) << " frame_p50_ms " << frame.percentile(0.5)
+        << " frame_p99_ms " << frame.percentile(0.99) << " overruns "
+        << frame.overruns(frame_period_milliseconds) << " frames "
+        << frame.milliseconds.size() << "\n";
   }
 };
 
@@ -136,21 +168,27 @@ int run(int argument_count, char* const* arguments) {
               << " for Lichtblick\n";
 
   Pacer pacer;
-  StepTimes step_times;
+  FrameTimes times;
   std::vector<std::int64_t> capture_times;
-  while (const std::optional<Frame> frame = reader.next_frame()) {
+  for (;;) {
+    const Clock::time_point read_start = Clock::now();
+    const std::optional<Frame> frame = reader.next_frame();
+    if (!frame) break;
+    times.read.record(read_start, Clock::now());
     if (paced) pacer.wait_for(frame->capture_time_micros);
-    const Clock::time_point start = Clock::now();
+
+    const Clock::time_point track_start = Clock::now();
     tracker.step(*frame);
     const std::vector<Track> tracks =
         tracker.confirmed_at(frame->capture_time_micros);
-    const std::chrono::duration<double, std::milli> elapsed =
-        Clock::now() - start;
-    step_times.milliseconds.push_back(elapsed.count());
-    capture_times.push_back(frame->capture_time_micros);
+    const Clock::time_point track_end = Clock::now();
+    times.track.record(track_start, track_end);
 
     if (csv) csv->write(*frame, tracks);
     if (scene) scene->publish(*frame, tracks);
+    times.publish.record(track_end, Clock::now());
+    times.close_frame();
+    capture_times.push_back(frame->capture_time_micros);
   }
   if (scene) scene->close();
 
@@ -158,10 +196,7 @@ int run(int argument_count, char* const* arguments) {
       capture_times.size() >= 2
           ? static_cast<double>(capture_times[1] - capture_times[0]) / 1000.0
           : 100.0;
-  std::cout << "step_p50_ms " << step_times.percentile(0.5) << " step_p99_ms "
-            << step_times.percentile(0.99) << " overruns "
-            << step_times.overruns(frame_period_milliseconds) << " frames "
-            << step_times.milliseconds.size() << "\n";
+  times.print(std::cout, frame_period_milliseconds);
   return 0;
 }
 

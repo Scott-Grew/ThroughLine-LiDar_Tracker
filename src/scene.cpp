@@ -4,6 +4,9 @@
 #include "scene.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <span>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -97,24 +100,52 @@ fg::Pose pose_at(const Eigen::Vector3d& position, double yaw) {
   return pose;
 }
 
-// The colour ramps blue to green over the lower half of the height range and
-// green to yellow over the upper half; Lichtblick reads rgba as 0xaarrggbb.
+// Colour of a point by height, as 0xaarrggbb, the order Lichtblick reads.
+// The ramp runs blue to green over the lower half of the height range and
+// green to yellow over the upper half, sampled into a table at compile time.
+constexpr std::size_t kRampSteps = 256;
+
+constexpr std::uint32_t ramp_color(float fraction) {
+  const bool lower_half = fraction < 0.5F;
+  const float local = lower_half ? fraction * 2.0F : (fraction - 0.5F) * 2.0F;
+  const float red = lower_half ? 0.0F : local;
+  const float green = lower_half ? local : 1.0F;
+  const float blue = lower_half ? 1.0F - local : 0.0F;
+  const auto red_byte = static_cast<std::uint32_t>(red * 255.0F);
+  const auto green_byte = static_cast<std::uint32_t>(green * 255.0F);
+  const auto blue_byte = static_cast<std::uint32_t>(blue * 255.0F);
+  return (0xFFU << 24U) | (red_byte << 16U) | (green_byte << 8U) | blue_byte;
+}
+
+constexpr std::array<std::uint32_t, kRampSteps> make_height_ramp() {
+  std::array<std::uint32_t, kRampSteps> table{};
+  for (std::size_t step = 0; step < kRampSteps; ++step)
+    table.at(step) = ramp_color(static_cast<float>(step) / (kRampSteps - 1));
+  return table;
+}
+
+constexpr std::array<std::uint32_t, kRampSteps> kHeightRamp =
+    make_height_ramp();
+
 std::uint32_t height_color(float height) {
   const float clamped = std::clamp(height, kPointHeightLow, kPointHeightHigh);
   const float fraction =
       (clamped - kPointHeightLow) / (kPointHeightHigh - kPointHeightLow);
-  const Eigen::Vector3f blue(0.0F, 0.0F, 1.0F);
-  const Eigen::Vector3f green(0.0F, 1.0F, 0.0F);
-  const Eigen::Vector3f yellow(1.0F, 1.0F, 0.0F);
-  const bool lower_half = fraction < 0.5F;
-  const Eigen::Vector3f from = lower_half ? blue : green;
-  const Eigen::Vector3f to = lower_half ? green : yellow;
-  const float local = lower_half ? fraction * 2.0F : (fraction - 0.5F) * 2.0F;
-  const Eigen::Vector3f color = from + local * (to - from);
-  const auto red_byte = static_cast<std::uint32_t>(color.x() * 255.0F);
-  const auto green_byte = static_cast<std::uint32_t>(color.y() * 255.0F);
-  const auto blue_byte = static_cast<std::uint32_t>(color.z() * 255.0F);
-  return (0xFFU << 24U) | (red_byte << 16U) | (green_byte << 8U) | blue_byte;
+  return kHeightRamp.at(static_cast<std::size_t>(fraction * (kRampSteps - 1)));
+}
+
+// The packed point layout, built once.
+const std::vector<fg::PackedElementField>& point_fields() {
+  using Field = fg::PackedElementField;
+  static const std::vector<Field> fields = {
+      {.name = "x", .offset = 0, .type = Field::NumericType::FLOAT32},
+      {.name = "y", .offset = 4, .type = Field::NumericType::FLOAT32},
+      {.name = "z", .offset = 8, .type = Field::NumericType::FLOAT32},
+      {.name = "rgba",
+       .offset = kColorOffsetBytes,
+       .type = Field::NumericType::UINT32},
+  };
+  return fields;
 }
 
 fg::LinePrimitive line(LineType type, fg::Color color, Points points) {
@@ -233,37 +264,31 @@ void Scene::publish(const Frame& frame, const std::vector<Track>& tracks) {
   transform.rotation = yaw_rotation(ego_yaw);
   check(sinks_->transform.log(transform, log_time), "cannot log transform");
 
-  // The whole frame moves to the scene frame in one matrix product; each
-  // packed point is x, y, z then its height colour.
+  // Each packed point is x, y, z then its height colour. The transform
+  // writes straight into the packed buffer through a strided map.
   using PointMatrix = Eigen::Matrix<float, 3, Eigen::Dynamic>;
-  using Field = fg::PackedElementField;
+  using PackedPoints =
+      Eigen::Map<PointMatrix, Eigen::Unaligned, Eigen::OuterStride<4>>;
   const auto point_count = static_cast<Eigen::Index>(frame.points.size());
   const Eigen::Map<const PointMatrix> local_points(&frame.points.data()->x, 3,
                                                    point_count);
   const Eigen::Vector3f shift = ego_position.cast<float>();
-  const PointMatrix scene_points =
-      (rotation.cast<float>() * local_points).colwise() + shift;
   fg::PointCloud cloud;
   cloud.timestamp = stamp;
   cloud.frame_id = "world";
   cloud.pose = pose_at(Eigen::Vector3d::Zero(), 0.0);
   cloud.point_stride = kPointStrideBytes;
-  cloud.fields = {
-      {.name = "x", .offset = 0, .type = Field::NumericType::FLOAT32},
-      {.name = "y", .offset = 4, .type = Field::NumericType::FLOAT32},
-      {.name = "z", .offset = 8, .type = Field::NumericType::FLOAT32},
-      {.name = "rgba",
-       .offset = kColorOffsetBytes,
-       .type = Field::NumericType::UINT32},
-  };
-  cloud.data.resize(static_cast<std::size_t>(point_count) * kPointStrideBytes);
+  cloud.fields = point_fields();
+  packed_points_.resize(static_cast<std::size_t>(point_count) * 4);
+  PackedPoints scene_points(packed_points_.data(), 3, point_count);
+  scene_points = (rotation.cast<float>() * local_points).colwise() + shift;
   for (Eigen::Index index = 0; index < point_count; ++index) {
-    const Eigen::Vector3f point = scene_points.col(index);
-    const std::uint32_t color = height_color(point.z());
-    const std::size_t offset = index * kPointStrideBytes;
-    std::memcpy(&cloud.data[offset], point.data(), kColorOffsetBytes);
-    std::memcpy(&cloud.data[offset + kColorOffsetBytes], &color, sizeof(color));
+    const std::uint32_t color = height_color(scene_points(2, index));
+    packed_points_[index * 4 + 3] = std::bit_cast<float>(color);
   }
+  const std::span<const std::byte> bytes =
+      std::as_bytes(std::span(packed_points_));
+  cloud.data.assign(bytes.begin(), bytes.end());
   check(sinks_->points.log(cloud, log_time), "cannot log point cloud");
 
   fg::SceneUpdate update;
