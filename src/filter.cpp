@@ -12,11 +12,6 @@
 
 namespace {
 
-// Initial sigmas for speed (m/s) and yaw rate (rad/s), which start
-// at zero unmeasured; wide so early frames correct them freely.
-constexpr double kInitialSpeedSigma = 10.0;
-constexpr double kInitialYawRateSigma = 1.0;
-
 // Fraction of a newly measured box size adopted per frame; size is
 // smoothed, not estimated like position and speed.
 constexpr double kSizeSmoothing = 0.3;
@@ -48,16 +43,18 @@ MotionFilter::MotionFilter(FilterNoise noise) : noise_(noise) {
   measurement_noise_ = variances.asDiagonal();
 }
 
-TrackState MotionFilter::start_state(Box box, std::int64_t time_micros) const {
+TrackState MotionFilter::start_state(const Detection& detection) const {
+  const ClassPrior prior = class_prior(detection.object_class);
+  const Box& box = detection.box;
   StateVector variances;
   variances << measurement_noise_.diagonal(),
-      kInitialSpeedSigma * kInitialSpeedSigma,
-      kInitialYawRateSigma * kInitialYawRateSigma;
+      prior.speed_sigma * prior.speed_sigma,
+      prior.yaw_rate_sigma * prior.yaw_rate_sigma;
 
   TrackState state;
   state.mean << box.center_x, box.center_y, box.yaw, 0.0, 0.0;
   state.covariance = variances.asDiagonal();
-  state.time_micros = time_micros;
+  state.acceleration_sigma = prior.acceleration_sigma;
   state.center_z = box.center_z;
   state.length = box.length;
   state.width = box.width;
@@ -127,7 +124,7 @@ void MotionFilter::predict(TrackState& state, double dt_seconds) const {
   yaw_acceleration_direction(kStateYaw) = half_dt_squared;
   yaw_acceleration_direction(kStateYawRate) = dt_seconds;
 
-  const double acceleration_sigma = noise_.sigma_acceleration;
+  const double acceleration_sigma = state.acceleration_sigma;
   const double yaw_acceleration_sigma = noise_.sigma_yaw_acceleration;
   const StateMatrix process_noise =
       acceleration_sigma * acceleration_sigma * acceleration_direction *

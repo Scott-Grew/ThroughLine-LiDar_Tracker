@@ -153,7 +153,8 @@ Track Tracker::new_track(const Detection& detection, std::int64_t time_micros) {
   Track track;
   track.track_id = next_track_id_++;
   track.object_class = detection.object_class;
-  track.state = filter_.start_state(detection.box, time_micros);
+  track.state = filter_.start_state(detection);
+  track.state.time_micros = time_micros;
   track.hits = 1;
   append_history(track);
   return track;

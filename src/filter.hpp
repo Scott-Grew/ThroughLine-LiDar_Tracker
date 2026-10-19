@@ -6,12 +6,40 @@
 #include <Eigen/Dense>
 #include "types.hpp"
 
+// What the filter assumes about an object class before it has seen it
+// move: how fast it may already be going, how fast it may be turning, and
+// how hard it may accelerate. Speed in m/s, yaw rate in rad/s,
+// acceleration in m/s^2. Chosen.
+struct ClassPrior {
+  double speed_sigma;
+  double yaw_rate_sigma;
+  double acceleration_sigma;
+};
+
+constexpr ClassPrior kVehiclePrior{
+    .speed_sigma = 10.0, .yaw_rate_sigma = 0.3, .acceleration_sigma = 2.0};
+constexpr ClassPrior kPedestrianPrior{
+    .speed_sigma = 2.0, .yaw_rate_sigma = 1.0, .acceleration_sigma = 0.5};
+constexpr ClassPrior kCyclistPrior{
+    .speed_sigma = 5.0, .yaw_rate_sigma = 0.3, .acceleration_sigma = 1.0};
+
+constexpr ClassPrior class_prior(ObjectClass object_class) {
+  switch (object_class) {
+    case ObjectClass::Vehicle:
+      return kVehiclePrior;
+    case ObjectClass::Pedestrian:
+      return kPedestrianPrior;
+    case ObjectClass::Cyclist:
+      return kCyclistPrior;
+  }
+  return kVehiclePrior;
+}
+
 // Process and measurement noise the filter uses to weigh a
 // prediction against a measurement.
 struct FilterNoise {
-  // Process noise is the sigma of unmodelled linear acceleration in
-  // m/s^2 and yaw acceleration in rad/s^2. Chosen.
-  double sigma_acceleration = 2.0;
+  // Process noise is the sigma of unmodelled yaw acceleration in
+  // rad/s^2; linear acceleration comes from the class prior. Chosen.
   double sigma_yaw_acceleration = 0.5;
   // Measurement sigmas are the box jitter stage_segment.py measured for
   // the segment, in metres and radians. MotionFilter refuses <= 0.
@@ -31,8 +59,9 @@ class MotionFilter {
  public:
   explicit MotionFilter(FilterNoise noise);
 
-  // A state at the measured box, with speed and yaw rate unknown.
-  [[nodiscard]] TrackState start_state(Box box, std::int64_t time_micros) const;
+  // A state at the measured box with speed and yaw rate unknown to the
+  // width of the class prior; the caller stamps its time.
+  TrackState start_state(const Detection& detection) const;
 
   // Moves the state forward to time_micros; a state already at or past
   // that time is left alone.

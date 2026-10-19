@@ -12,8 +12,9 @@ be three seconds from now. The whole scene streams to a viewer while it runs.
 ## Results
 
 The input boxes come from CasA, a published LiDAR detector, using the detection files its
-authors released for Waymo's validation set. Only boxes the detector scored at 0.5 or
-higher are used, which is the cut its authors use. The detector is not part of this
+authors released for Waymo's validation set. Boxes scoring under 0.5 are dropped, and
+pedestrian boxes under 0.7, where the detector's precision on these clips was lowest. The
+detector is not part of this
 project, so the scores below measure the tracker on real detector output, with the
 detector's misses and false alarms included.
 
@@ -23,15 +24,17 @@ validation set, at Waymo's LEVEL_2 difficulty:
 
 | scene                       | cars | people |
 |-----------------------------|------|--------|
-| fast road, 63 km/h          | 0.30 | 0.24   |
-| crawling through a junction | 0.54 | 0.55   |
-| slow turn, 21 km/h          | 0.71 | 0.07   |
+| fast road, 63 km/h          | 0.30 | 0.22   |
+| crawling through a junction | 0.54 | 0.57   |
+| slow turn, 21 km/h          | 0.72 | 0.34   |
 
 Most lost points on the fast road are misses: the detector does not see distant cars that
 the labels contain, and the tracker waits two scans before it reports a new object.
 
-One frame takes 0.05 to 0.2 milliseconds to track, measured by `make run` on the same
-three clips, and never more than 0.5. The car gives it 100.
+From a frame being read to its scene being published takes 2 to 4 milliseconds at the
+median and under 8 at the 99th percentile, measured by `make live` on the fast-road clip
+with no viewer attached, on 2026-10-18. The tracking step itself is under 0.1 ms. The car
+gives it 100.
 
 ## Architecture
 
@@ -74,7 +77,8 @@ against a simulated truth, and its derivatives against finite differences.
 ## Build and run
 
 You need `cmake`, `protobuf`, `zstd` and `lz4` from Homebrew, and a Python environment
-with `pyarrow`, `numpy`, `protobuf` and `mcap-protobuf-support`. The tests make their own
+with `pyarrow`, `numpy`, `protobuf` and `mcap-protobuf-support`. Every laser's points
+are staged, uncompressed, so a clip is about 300 to 400 MB on disk. The tests make their own
 fake scene, so they need no data.
 
 ```

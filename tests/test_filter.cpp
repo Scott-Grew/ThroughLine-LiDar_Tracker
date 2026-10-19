@@ -23,7 +23,7 @@ constexpr double kRequiredFractionInsideBand = 0.90;
 std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
   std::mt19937_64 generator(seed);
   std::normal_distribution<double> acceleration_draw(
-      0.0, kTestNoise.sigma_acceleration);
+      0.0, kVehiclePrior.acceleration_sigma);
   std::normal_distribution<double> yaw_acceleration_draw(
       0.0, kTestNoise.sigma_yaw_acceleration);
   std::normal_distribution<double> position_measurement_noise(
@@ -43,7 +43,9 @@ std::vector<double> nees_per_step_for_seed(std::uint64_t seed) {
       kTestVehicleWidth,
       kTestVehicleHeight,
       wrap_angle(truth.yaw + yaw_measurement_noise(generator))};
-  TrackState state = filter.start_state(first_measurement, 0);
+  const Detection first_detection{.object_class = ObjectClass::Vehicle,
+                                  .box = first_measurement};
+  TrackState state = filter.start_state(first_detection);
 
   std::vector<double> nees_per_step(kStepCount, 0.0);
 
@@ -96,6 +98,7 @@ TrackState make_motion_test_state(double yaw_rate) {
   state.mean << 3.0, -2.0, 0.7, 8.0, yaw_rate;
   state.covariance = StateMatrix::Identity();
   state.time_micros = 0;
+  state.acceleration_sigma = kVehiclePrior.acceleration_sigma;
   state.center_z = 0.0;
   state.length = kTestVehicleLength;
   state.width = kTestVehicleWidth;

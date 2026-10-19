@@ -11,10 +11,10 @@ from mcap.writer import CompressionType
 from mcap_protobuf.writer import Writer
 from waymo_boxes import TRACKED_OBJECT_CLASSES, read_ground_truth_boxes
 
-# CasA's class names mapped to Waymo's type codes, and the score below
-# which its detections are dropped. Chosen.
+# CasA's class names mapped to Waymo's type codes, and per class the score
+# below which its detections are dropped. Chosen.
 CLASS_CODES = {"Vehicle": 1, "Pedestrian": 2, "Cyclist": 4}
-MIN_SCORE = 0.5
+MIN_SCORE = {"Vehicle": 0.5, "Pedestrian": 0.7, "Cyclist": 0.5}
 
 # The only classes a CasA result pickle may build, so loading it runs no code.
 NUMPY_CLASSES = {
@@ -140,7 +140,7 @@ def read_poses(parquet_root, segment_name):
 
 
 def read_detections(result_path, segment_name):
-    """Returns CasA's detections scoring at least MIN_SCORE, in frame order,
+    """Returns CasA's detections at or above the class cut, in frame order,
     one (classes, (N, 7) boxes) pair per frame, boxes in the vehicle frame."""
     with open(result_path, "rb") as stream:
         results = NumpyOnlyUnpickler(stream).load()
@@ -149,7 +149,8 @@ def read_detections(result_path, segment_name):
     segment_results.sort(key = lambda result: int(result["frame_id"]))
     detections = []
     for result in segment_results:
-        kept = result["score"] >= MIN_SCORE
+        cuts = np.array([MIN_SCORE[name] for name in result["name"]])
+        kept = result["score"] >= cuts
         names = result["name"][kept]
         classes = np.array([CLASS_CODES[name] for name in names])
         boxes = result["boxes_lidar"][kept].astype(np.float64)

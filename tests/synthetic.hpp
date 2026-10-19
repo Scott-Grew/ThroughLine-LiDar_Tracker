@@ -8,8 +8,7 @@
 
 // Values shared by the tests, the filter noise, the simulated vehicle's box
 // in metres, and the 10 Hz frame period.
-inline constexpr FilterNoise kTestNoise{.sigma_acceleration = 2.0,
-                                        .sigma_yaw_acceleration = 0.5,
+inline constexpr FilterNoise kTestNoise{.sigma_yaw_acceleration = 0.5,
                                         .sigma_measurement_position = 0.1,
                                         .sigma_measurement_yaw = 0.02};
 inline constexpr double kTestVehicleLength = 4.5;
